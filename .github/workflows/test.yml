@@ -1,0 +1,37 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Install workflow test dependency
+        run: python3 -m pip install --disable-pip-version-check --no-input PyYAML==6.0.3
+      - name: Run Python tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s tests -p '*.py' -v
+      - name: Run shell tests
+        run: |
+          set -eu
+          for test_script in tests/*.sh; do
+            sh "$test_script"
+          done
+      - name: Check shell syntax
+        run: |
+          set -eu
+          for shell_file in scripts/*.sh tests/*.sh; do
+            sh -n "$shell_file"
+          done

@@ -1,0 +1,14 @@
+downloads/
+pages/
+__pycache__/
+*.pyc
+*.ipk
+*.tgz
+*.tar
+*.tar.gz
+*.zip
+*.sec
+*.key
+*.pem
+*.priv
+*.private

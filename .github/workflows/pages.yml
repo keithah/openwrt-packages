@@ -1,0 +1,74 @@
+name: Publish signed OpenWrt feed
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Check signing key
+        env:
+          OPENWRT_FEED_USIGN_PRIVATE_KEY: ${{ secrets.OPENWRT_FEED_USIGN_PRIVATE_KEY }}
+        run: test -n "$OPENWRT_FEED_USIGN_PRIVATE_KEY"
+      - name: Fetch immutable releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/fetch_releases.py --manifest sources.json --destination downloads
+      - name: Assemble feed
+        run: python3 scripts/assemble_feed.py --manifest sources.json --downloads downloads --output pages
+      - name: Build pinned usign
+        run: |
+          set -eu
+          git init "$RUNNER_TEMP/usign-src"
+          git -C "$RUNNER_TEMP/usign-src" remote add origin https://git.openwrt.org/project/usign.git
+          git -C "$RUNNER_TEMP/usign-src" fetch --depth 1 origin c4c72b1b07945ee192361dc751291a7c98d6adcd
+          git -C "$RUNNER_TEMP/usign-src" checkout --detach FETCH_HEAD
+          cmake -S "$RUNNER_TEMP/usign-src" -B "$RUNNER_TEMP/usign-build"
+          cmake --build "$RUNNER_TEMP/usign-build"
+      - name: Sign feed
+        env:
+          OPENWRT_FEED_USIGN_PRIVATE_KEY: ${{ secrets.OPENWRT_FEED_USIGN_PRIVATE_KEY }}
+        run: USIGN="$RUNNER_TEMP/usign-build/usign" sh scripts/sign_feed.sh pages
+      - name: Verify signature with usign
+        run: |
+          "$RUNNER_TEMP/usign-build/usign" -V \
+            -m pages/Packages \
+            -p pages/keithah-feed.pub \
+            -x pages/Packages.sig
+      - name: Validate deployable inventory
+        run: python3 tests/inventory_test.py pages
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: pages
+          include-hidden-files: true
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy Pages artifact
+        id: deployment
+        uses: actions/deploy-pages@v5
