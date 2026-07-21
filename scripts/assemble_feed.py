@@ -24,7 +24,7 @@ MAX_TAR_SIZE = 128 * 1024 * 1024
 MAX_CONTROL_SIZE = 1024 * 1024
 MAX_INSTALLER_SIZE = 1024 * 1024
 MAX_MEMBERS = 128
-MAX_DATA_MEMBER_SIZE = 16 * 1024 * 1024
+MAX_DATA_MEMBER_SIZE = 64 * 1024 * 1024
 MAX_DATA_TOTAL_SIZE = 128 * 1024 * 1024
 FIELD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
 PRODUCT_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -45,6 +45,11 @@ EXPECTED_INSTALLERS = {
     "starwatch": ("install-starwatch.sh", "package/install.sh"),
     "wattline": ("install-wattline.sh", "package/install.sh"),
     "speedtest": ("install-ookla-speedtest-cli.sh", "scripts/install.sh"),
+}
+EXPECTED_IPK_PATTERNS = {
+    "starwatch": r"^(?P<package>starwatchd|luci-app-starwatch|gl-app-starwatch)_(?P<version>[A-Za-z0-9.+~:-]+)_(?P<architecture>aarch64_cortex-a53|all)\.ipk$",
+    "wattline": r"^(?P<package>wattlined|wattline-bt|wattline-rtl8761b|luci-app-wattline|gl-app-wattline)_(?P<version>[A-Za-z0-9.+~:-]+)_(?P<architecture>aarch64_cortex-a53|all)\.ipk$",
+    "speedtest": r"^(?P<package>ookla-speedtest-cli)_(?P<version>[A-Za-z0-9.+~:-]+)_(?P<architecture>aarch64_cortex-a53)\.ipk$",
 }
 
 
@@ -135,8 +140,9 @@ def _validate_manifest(raw: dict) -> list[SourceSpec]:
         result.append(spec)
     if ({spec.product: spec.repository for spec in result} != EXPECTED_REPOSITORIES
             or {spec.product: frozenset(spec.packages) for spec in result} != EXPECTED_PACKAGES
-            or {spec.product: (spec.installer, spec.installer_source) for spec in result} != EXPECTED_INSTALLERS):
-        raise FeedError("manifest must define the three exact product repositories, packages, and installers")
+            or {spec.product: (spec.installer, spec.installer_source) for spec in result} != EXPECTED_INSTALLERS
+            or {spec.product: spec.ipk_pattern for spec in result} != EXPECTED_IPK_PATTERNS):
+        raise FeedError("manifest must define the three exact product repositories, packages, installers, and regexes")
     return result
 
 

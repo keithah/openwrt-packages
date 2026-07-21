@@ -190,6 +190,12 @@ class AssembleFeedTest(unittest.TestCase):
         changed["sources"][0]["installer"] = "install-other.sh"
         with self.assertRaisesRegex(FeedError, "exact product"):
             assemble(self.downloads, self.output, changed)
+        changed = json.loads(json.dumps(self.manifest))
+        changed["sources"][0]["ipk_pattern"] = (
+            "^(?P<package>starwatchd)_(?P<version>.+)_(?P<architecture>all)\\.ipk$"
+        )
+        with self.assertRaisesRegex(FeedError, "exact product"):
+            assemble(self.downloads, self.output, changed)
 
     def test_rejects_control_metadata_that_disagrees_with_filename(self):
         target = next((self.downloads / "starwatch").glob("*.ipk"))
@@ -247,13 +253,22 @@ class AssembleFeedTest(unittest.TestCase):
         # Patch the declared size without allocating a giant fixture; tarfile
         # must still be forced through the bounded member-size check.
         raw = bytearray(_tar([("./usr/bin/x", b"x", "file")]))
-        raw[124:136] = b"100000001\0\0\0"  # 16 MiB + 1, octal
+        raw[124:136] = b"400000001\0\0\0"  # 64 MiB + 1, octal
         raw[148:156] = b"        "
         checksum = sum(raw[:512])
         raw[148:156] = f"{checksum:06o}\0 ".encode()
         make_ipk(target, "starwatchd", arch="aarch64_cortex-a53",
                  data_override=gzip.compress(bytes(raw), mtime=0))
         self.assert_rejected("member size.*data archive")
+
+    def test_accepts_data_member_larger_than_real_starwatch_binary(self):
+        target = next((self.downloads / "starwatch").glob("*.ipk"))
+        payload = b"\0" * 18_809_017
+        data = gzip.compress(_tar([("./usr/bin/starwatchd", payload, "file")]), mtime=0)
+        make_ipk(target, "starwatchd", version="1.2.3", arch="aarch64_cortex-a53",
+                 data_override=data)
+        records = assemble(self.downloads, self.output, self.manifest)
+        self.assertIn("starwatchd", {record.package for record in records})
 
     def test_accepts_safe_control_directories_but_rejects_links(self):
         target = next((self.downloads / "starwatch").glob("*.ipk"))
