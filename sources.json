@@ -29,7 +29,7 @@
     },
     {
       "product": "speedtest-web",
-      "repository": "keithah/openwrt-ookla-speedtest-web",
+      "repository": "keithah/openwrt-ookla-speedtest",
       "packages": ["ookla-speedtest-webd", "luci-app-ookla-speedtest-web", "gl-app-ookla-speedtest-web"],
       "ipk_pattern": "^(?P<package>ookla-speedtest-webd|luci-app-ookla-speedtest-web|gl-app-ookla-speedtest-web)_(?P<version>[A-Za-z0-9.+~:-]+)_(?P<architecture>all)\\.ipk$",
       "installer": "install-ookla-speedtest-web.sh",

@@ -163,7 +163,7 @@ class AssembleFeedTest(unittest.TestCase):
 
     def test_manifest_is_strict_and_names_exact_repositories(self):
         repos = {item["repository"] for item in self.manifest["sources"]}
-        self.assertEqual(repos, {"keithah/openwrt-starwatch", "keithah/openwrt-wattline", "keithah/openwrt-ookla-speedtest-cli", "keithah/openwrt-ookla-speedtest-web"})
+        self.assertEqual(repos, {"keithah/openwrt-starwatch", "keithah/openwrt-wattline", "keithah/openwrt-ookla-speedtest-cli", "keithah/openwrt-ookla-speedtest"})
         release_installers = {
             item["product"]: item["release_installer_asset"]
             for item in self.manifest["sources"]

@@ -170,7 +170,7 @@ class WorkflowPolicyTest(unittest.TestCase):
             "keithah/openwrt-starwatch",
             "keithah/openwrt-wattline",
             "keithah/openwrt-ookla-speedtest-cli",
-            "keithah/openwrt-ookla-speedtest-web",
+            "keithah/openwrt-ookla-speedtest",
         ):
             self.assertIn(f"https://github.com/{repository}", readme)
         for package in (

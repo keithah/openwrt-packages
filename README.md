@@ -56,7 +56,7 @@ source repository:
 [Starwatch](https://github.com/keithah/openwrt-starwatch),
 [Wattline](https://github.com/keithah/openwrt-wattline), and
 [Ookla Speedtest CLI packaging](https://github.com/keithah/openwrt-ookla-speedtest-cli).
-[Ookla Speedtest Web packaging](https://github.com/keithah/openwrt-ookla-speedtest-web).
+[Ookla Speedtest packaging](https://github.com/keithah/openwrt-ookla-speedtest).
 This repository downloads their release assets and installers; it does not
 build or combine product source.
 

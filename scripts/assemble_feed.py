@@ -36,7 +36,7 @@ EXPECTED_REPOSITORIES = {
     "starwatch": "keithah/openwrt-starwatch",
     "wattline": "keithah/openwrt-wattline",
     "speedtest": "keithah/openwrt-ookla-speedtest-cli",
-    "speedtest-web": "keithah/openwrt-ookla-speedtest-web",
+    "speedtest-web": "keithah/openwrt-ookla-speedtest",
 }
 EXPECTED_PACKAGES = {
     "starwatch": frozenset({"starwatchd", "luci-app-starwatch", "gl-app-starwatch"}),
