@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import tempfile
 from urllib.error import HTTPError, URLError
@@ -28,6 +29,8 @@ MAX_ASSET_SIZE = 64 * 1024 * 1024
 MAX_INSTALLER_SIZE = 1024 * 1024
 MAX_HEADER_SIZE = 64 * 1024
 CHUNK_SIZE = 64 * 1024
+MAX_TAG_DEPTH = 8
+GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 ALLOWED_DOWNLOAD_TYPES = frozenset({
     "application/octet-stream",
     "application/gzip",
@@ -210,24 +213,23 @@ def _asset_api_url(spec: SourceSpec, asset: dict) -> tuple[str, str]:
 
 
 def _latest_release(opener, spec: SourceSpec, token: str | None) -> tuple[str, list[tuple[str, str]]]:
-    url = f"{API_ROOT}/repos/{spec.repository}/releases?per_page=100"
-    releases = _get_json(opener, url, token)
-    if not isinstance(releases, list) or len(releases) > 100:
-        raise FetchError(f"malformed releases response for {spec.product}")
-    selected = None
-    for release in releases:
-        if not isinstance(release, dict):
-            raise FetchError("malformed release entry")
-        if not all(key in release for key in ("tag_name", "draft", "prerelease", "assets")):
-            raise FetchError("release entry is missing required fields")
-        if not isinstance(release["draft"], bool) or not isinstance(release["prerelease"], bool):
-            raise FetchError("release flags must be booleans")
-        if not release["draft"] and not release["prerelease"] and selected is None:
-            selected = release
-    if selected is None:
-        raise FetchError(f"no stable release found for {spec.product}")
-    tag = _validate_tag(selected["tag_name"])
-    raw_assets = selected["assets"]
+    url = f"{API_ROOT}/repos/{spec.repository}/releases/latest"
+    release = _get_json(opener, url, token)
+    if not isinstance(release, dict):
+        raise FetchError(f"malformed latest release response for {spec.product}")
+    if not all(key in release for key in ("tag_name", "draft", "prerelease", "assets")):
+        raise FetchError("latest release is missing required fields")
+    if not isinstance(release["draft"], bool) or not isinstance(release["prerelease"], bool):
+        raise FetchError("release flags must be booleans")
+    if release["draft"] or release["prerelease"]:
+        raise FetchError(f"latest release is not stable for {spec.product}")
+    # GitHub added this field after the endpoint was established. Accept both
+    # mutable and immutable releases for compatibility, but reject malformed
+    # values; tag-to-commit pinning and the final movement check are mandatory.
+    if "immutable" in release and not isinstance(release["immutable"], bool):
+        raise FetchError("latest release immutable flag must be boolean")
+    tag = _validate_tag(release["tag_name"])
+    raw_assets = release["assets"]
     if not isinstance(raw_assets, list) or len(raw_assets) > 256:
         raise FetchError("malformed release asset list")
     seen_names = set()
@@ -239,10 +241,8 @@ def _latest_release(opener, spec: SourceSpec, token: str | None) -> tuple[str, l
             raise FetchError(f"duplicate release asset name: {name}")
         seen_names.add(name)
         match = spec.ipk_regex.fullmatch(name)
-        if name.endswith(".ipk") and match is None:
-            raise FetchError(f"unexpected IPK release asset: {name}")
         if match is None:
-            continue
+            raise FetchError(f"unexpected release asset: {name}")
         package = match.group("package")
         if package not in spec.packages or package in selected_packages:
             raise FetchError(f"duplicate or unexpected package release asset: {package}")
@@ -251,6 +251,43 @@ def _latest_release(opener, spec: SourceSpec, token: str | None) -> tuple[str, l
     if selected_packages != set(spec.packages):
         raise FetchError(f"missing release package assets for {spec.product}")
     return tag, sorted(selected_assets)
+
+
+def _git_target(spec: SourceSpec, value: object) -> tuple[str, str, str]:
+    if not isinstance(value, dict):
+        raise FetchError("malformed Git tag object")
+    object_type = value.get("type")
+    sha = value.get("sha")
+    url = value.get("url")
+    if object_type not in {"commit", "tag"} or not isinstance(sha, str) or not GIT_SHA.fullmatch(sha):
+        raise FetchError("invalid Git tag target object")
+    expected = f"{API_ROOT}/repos/{spec.repository}/git/{'commits' if object_type == 'commit' else 'tags'}/{sha}"
+    if url != expected:
+        raise FetchError("Git tag target URL does not match its object")
+    return object_type, sha, url
+
+
+def _resolve_tag(opener, spec: SourceSpec, tag: str, token: str | None) -> str:
+    encoded_tag = quote(tag, safe="")
+    ref_url = f"{API_ROOT}/repos/{spec.repository}/git/ref/tags/{encoded_tag}"
+    value = _get_json(opener, ref_url, token)
+    if (not isinstance(value, dict) or value.get("ref") != f"refs/tags/{tag}"
+            or "object" not in value):
+        raise FetchError(f"malformed Git tag ref for {spec.product}")
+    object_type, sha, object_url = _git_target(spec, value["object"])
+    seen = set()
+    for _depth in range(MAX_TAG_DEPTH):
+        if object_type == "commit":
+            return sha
+        if sha in seen:
+            raise FetchError(f"Git tag cycle detected for {spec.product}")
+        seen.add(sha)
+        annotated = _get_json(opener, object_url, token)
+        if (not isinstance(annotated, dict) or annotated.get("sha") != sha
+                or "object" not in annotated):
+            raise FetchError(f"malformed annotated Git tag for {spec.product}")
+        object_type, sha, object_url = _git_target(spec, annotated["object"])
+    raise FetchError(f"Git tag nesting limit exceeded for {spec.product}")
 
 
 def _download_asset(opener, url: str, output: Path, token: str | None) -> None:
@@ -296,9 +333,9 @@ def _download_asset(opener, url: str, output: Path, token: str | None) -> None:
             pass
 
 
-def _installer(opener, spec: SourceSpec, tag: str, token: str | None) -> bytes:
+def _installer(opener, spec: SourceSpec, commit: str, token: str | None) -> bytes:
     encoded_path = "/".join(quote(part, safe="") for part in spec.installer_source.split("/"))
-    url = f"{API_ROOT}/repos/{spec.repository}/contents/{encoded_path}?ref={quote(tag, safe='')}"
+    url = f"{API_ROOT}/repos/{spec.repository}/contents/{encoded_path}?ref={commit}"
     value = _get_json(opener, url, token)
     required = {"type", "name", "path", "encoding", "content", "size", "sha"}
     if not isinstance(value, dict) or not required.issubset(value):
@@ -375,14 +412,16 @@ def fetch_all(manifest: dict, destination: Path, *, opener=None,
         token = os.environ.get("GH_TOKEN") or None
     staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.new-", dir=resolved_parent))
     tags = {}
+    pinned = {}
     try:
         for spec in specs:
             product_dir = staging / spec.product
             product_dir.mkdir(mode=0o755)
             tag, assets = _latest_release(opener, spec, token)
+            commit = _resolve_tag(opener, spec, tag, token)
             for name, url in assets:
                 _download_asset(opener, url, product_dir / name, token)
-            installer = _installer(opener, spec, tag, token)
+            installer = _installer(opener, spec, commit, token)
             installer_path = product_dir / spec.installer
             installer_path.write_bytes(installer)
             os.chmod(installer_path, 0o755)
@@ -392,6 +431,10 @@ def fetch_all(manifest: dict, destination: Path, *, opener=None,
                     or any(not entry.is_file() or entry.is_symlink() for entry in entries)):
                 raise FetchError(f"unexpected staged inventory for {spec.product}")
             tags[spec.product] = tag
+            pinned[spec.product] = (spec, tag, commit)
+        for product, (spec, tag, commit) in pinned.items():
+            if _resolve_tag(opener, spec, tag, token) != commit:
+                raise FetchError(f"release tag moved while fetching {product}")
         _replace_destination(staging, destination)
         return tags
     except BaseException:
