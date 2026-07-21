@@ -166,16 +166,31 @@ fi
 grep -F 'generated destination must not be a directory' "$tmp/err" >/dev/null
 [ ! -e "$pages/Packages.sig" ]
 
-# A trailing slash cannot disguise a symlinked Pages root.
+# No lexical form or parent component can disguise a symlinked Pages root.
 make_pages
+printf 'untouched signature\n' >"$pages/Packages.sig"
+printf 'untouched public\n' >"$pages/keithah-feed.pub"
+printf 'untouched jekyll\n' >"$pages/.nojekyll"
 ln -s "$pages" "$tmp/pages-link"
-if OPENWRT_FEED_USIGN_PRIVATE_KEY="$FAKE_EXPECTED_SECRET" \
-	sh "$root/scripts/sign_feed.sh" "$tmp/pages-link/" >"$tmp/out" 2>"$tmp/err"; then
-	echo 'symlinked Pages root unexpectedly succeeded' >&2
-	exit 1
-fi
-grep -F 'assembled Pages directory with Packages is required' "$tmp/err" >/dev/null
-[ ! -e "$pages/Packages.sig" ]
+ln -s "$tmp" "$tmp/parent-link"
+for unsafe_pages in "$tmp/pages-link" "$tmp/pages-link/" "$tmp/pages-link/." "$tmp/parent-link/pages"; do
+	if OPENWRT_FEED_USIGN_PRIVATE_KEY="$FAKE_EXPECTED_SECRET" \
+		sh "$root/scripts/sign_feed.sh" "$unsafe_pages" >"$tmp/out" 2>"$tmp/err"; then
+		echo "symlinked Pages path unexpectedly succeeded: $unsafe_pages" >&2
+		exit 1
+	fi
+	grep -F 'Pages path must not contain symlinks' "$tmp/err" >/dev/null
+	[ "$(cat "$pages/Packages.sig")" = 'untouched signature' ]
+	[ "$(cat "$pages/keithah-feed.pub")" = 'untouched public' ]
+	[ "$(cat "$pages/.nojekyll")" = 'untouched jekyll' ]
+done
+
+# Ordinary dot components in an otherwise real path remain valid.
+make_pages
+OPENWRT_FEED_USIGN_PRIVATE_KEY="$FAKE_EXPECTED_SECRET" \
+	sh "$root/scripts/sign_feed.sh" "$pages/./"
+[ "$(cat "$pages/Packages.sig")" = 'new signature' ]
+[ ! -L "$pages/Packages.sig" ]
 
 # Success signs the uncompressed index, verifies it, and publishes trust metadata.
 make_pages

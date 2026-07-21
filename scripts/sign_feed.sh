@@ -5,7 +5,7 @@ pages=${1:-pages}
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 public_key="$root/keithah-feed.pub"
 usign=${USIGN:-usign}
-signature="$pages/Packages.sig"
+signature=
 secret_file=
 signature_tmp=
 public_tmp=
@@ -17,7 +17,7 @@ cleanup() {
 	status=$?
 	trap - EXIT HUP INT TERM
 	if [ "$complete" != true ]; then
-		if [ ! -d "$signature" ] || [ -L "$signature" ]; then
+		if [ -n "$signature" ] && { [ ! -d "$signature" ] || [ -L "$signature" ]; }; then
 			rm -f -- "$signature" 2>/dev/null || :
 		fi
 	fi
@@ -34,16 +34,48 @@ trap 'caught_signal=HUP; exit 129' HUP
 trap 'caught_signal=INT; exit 130' INT
 trap 'caught_signal=TERM; exit 143' TERM
 
-if [ -z "${OPENWRT_FEED_USIGN_PRIVATE_KEY:-}" ]; then
-	echo 'OPENWRT_FEED_USIGN_PRIVATE_KEY is required' >&2
+# Check every supplied path component lexically. Testing only the final string
+# is insufficient because `link/.` and `parent-link/child` dereference a
+# symlink before a final `test -L` can observe it. Dot components are harmless;
+# parent traversal is rejected as ambiguous for a publication target.
+case "$pages" in
+	/*) path_cursor=/; path_rest=${pages#/} ;;
+	*) path_cursor=; path_rest=$pages ;;
+esac
+while :; do
+	case "$path_rest" in
+		*/*) component=${path_rest%%/*}; path_rest=${path_rest#*/}; more=true ;;
+		*) component=$path_rest; path_rest=; more=false ;;
+	esac
+	case "$component" in
+		''|.) ;;
+		..)
+			echo 'Pages path must not contain parent traversal' >&2
+			exit 1
+			;;
+		*)
+			case "$path_cursor" in
+				/) candidate="/$component" ;;
+				'') candidate=$component ;;
+				*) candidate="$path_cursor/$component" ;;
+			esac
+			if [ -L "$candidate" ]; then
+				echo "Pages path must not contain symlinks: $candidate" >&2
+				exit 1
+			fi
+			path_cursor=$candidate
+			;;
+	esac
+	[ "$more" = true ] || break
+done
+if [ ! -d "$pages" ] || [ ! -f "$pages/Packages" ] || [ -L "$pages/Packages" ]; then
+	echo 'assembled Pages directory with Packages is required' >&2
 	exit 1
 fi
-pages_check=$pages
-while [ "$pages_check" != / ] && [ "${pages_check%/}" != "$pages_check" ]; do
-	pages_check=${pages_check%/}
-done
-if [ ! -d "$pages" ] || [ -L "$pages_check" ] || [ ! -f "$pages/Packages" ] || [ -L "$pages/Packages" ]; then
-	echo 'assembled Pages directory with Packages is required' >&2
+pages=$(CDPATH= cd -P -- "$pages" && pwd)
+signature="$pages/Packages.sig"
+if [ -z "${OPENWRT_FEED_USIGN_PRIVATE_KEY:-}" ]; then
+	echo 'OPENWRT_FEED_USIGN_PRIVATE_KEY is required' >&2
 	exit 1
 fi
 for destination in "$signature" "$pages/keithah-feed.pub" "$pages/.nojekyll"; do
