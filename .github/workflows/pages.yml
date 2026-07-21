@@ -29,9 +29,9 @@ jobs:
       - name: Fetch immutable releases
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/fetch_releases.py --manifest sources.json --destination downloads
+        run: python3 -m scripts.fetch_releases --manifest sources.json --destination downloads
       - name: Assemble feed
-        run: python3 scripts/assemble_feed.py --manifest sources.json --downloads downloads --output pages
+        run: python3 -m scripts.assemble_feed --manifest sources.json --downloads downloads --output pages
       - name: Build pinned usign
         run: |
           set -eu
@@ -52,7 +52,7 @@ jobs:
             -p pages/keithah-feed.pub \
             -x pages/Packages.sig
       - name: Validate deployable inventory
-        run: python3 tests/inventory_test.py pages
+        run: python3 -m tests.inventory_test pages
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:

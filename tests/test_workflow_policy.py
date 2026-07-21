@@ -106,7 +106,10 @@ class WorkflowPolicyTest(unittest.TestCase):
         verify = build_steps[names.index("Verify signature with usign")]["run"]
         for argument in ("-V", "pages/Packages", "pages/keithah-feed.pub", "pages/Packages.sig"):
             self.assertIn(argument, verify)
-        self.assertIn("tests/inventory_test.py pages", build_steps[names.index("Validate deployable inventory")]["run"])
+        self.assertEqual(
+            build_steps[names.index("Validate deployable inventory")]["run"],
+            "python3 -m tests.inventory_test pages",
+        )
 
         upload = build_steps[names.index("Upload Pages artifact")]
         self.assertEqual(upload.get("uses"), "actions/upload-pages-artifact@v5")
@@ -119,9 +122,12 @@ class WorkflowPolicyTest(unittest.TestCase):
         self.assertEqual(text.count("secrets.OPENWRT_FEED_USIGN_PRIVATE_KEY"), 2)
         fetch = build_steps[names.index("Fetch immutable releases")]
         self.assertEqual(fetch.get("env"), {"GH_TOKEN": "${{ github.token }}"})
-        self.assertIn("scripts/fetch_releases.py --manifest sources.json --destination downloads", fetch["run"])
+        self.assertEqual(
+            fetch["run"],
+            "python3 -m scripts.fetch_releases --manifest sources.json --destination downloads",
+        )
         self.assertIn(
-            "scripts/assemble_feed.py --manifest sources.json --downloads downloads --output pages",
+            "python3 -m scripts.assemble_feed --manifest sources.json --downloads downloads --output pages",
             build_steps[names.index("Assemble feed")]["run"],
         )
 
