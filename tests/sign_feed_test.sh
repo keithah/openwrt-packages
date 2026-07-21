@@ -46,6 +46,7 @@ case "$mode" in
 	-S)
 		[ -z "${OPENWRT_FEED_USIGN_PRIVATE_KEY:-}" ]
 		[ "$message" = "$FAKE_PAGES/Packages" ]
+		case "$signature" in "$FAKE_PAGES"/.Packages.sig.*) ;; *) exit 89 ;; esac
 		[ -f "$secret" ]
 		[ "$(stat -c %a "$secret")" = 600 ]
 		case "$secret" in "$FAKE_PAGES"/*) exit 91 ;; esac
@@ -61,6 +62,7 @@ case "$mode" in
 		[ -z "${OPENWRT_FEED_USIGN_PRIVATE_KEY:-}" ]
 		[ "$message" = "$FAKE_PAGES/Packages" ]
 		[ "$(cat "$public")" = "$(cat "$FAKE_EXPECTED_PUBLIC")" ]
+		case "$signature" in "$FAKE_PAGES"/.Packages.sig.*) ;; *) exit 88 ;; esac
 		[ "$(cat "$signature")" = 'new signature' ]
 		[ "${FAKE_VERIFY_FAIL:-0}" != 1 ] || exit 93
 		;;
@@ -134,6 +136,46 @@ fi
 [ -z "$(find "$key_tmp" -mindepth 1 -print -quit)" ]
 grep -F -- '-S Packages' "$FAKE_LOG" >/dev/null
 grep -F -- '-V Packages' "$FAKE_LOG" >/dev/null
+
+# Generated destinations never follow attacker-controlled symlinks.
+make_pages
+printf 'signature target\n' >"$tmp/external-signature"
+printf 'public target\n' >"$tmp/external-public"
+printf 'jekyll target\n' >"$tmp/external-jekyll"
+ln -s "$tmp/external-signature" "$pages/Packages.sig"
+ln -s "$tmp/external-public" "$pages/keithah-feed.pub"
+ln -s "$tmp/external-jekyll" "$pages/.nojekyll"
+OPENWRT_FEED_USIGN_PRIVATE_KEY="$FAKE_EXPECTED_SECRET" \
+	sh "$root/scripts/sign_feed.sh" "$pages"
+[ "$(cat "$tmp/external-signature")" = 'signature target' ]
+[ "$(cat "$tmp/external-public")" = 'public target' ]
+[ "$(cat "$tmp/external-jekyll")" = 'jekyll target' ]
+for output in Packages.sig keithah-feed.pub .nojekyll; do
+	[ -f "$pages/$output" ]
+	[ ! -L "$pages/$output" ]
+done
+
+# Real directories at generated destinations fail before signing.
+make_pages
+mkdir "$pages/keithah-feed.pub"
+if OPENWRT_FEED_USIGN_PRIVATE_KEY="$FAKE_EXPECTED_SECRET" \
+	sh "$root/scripts/sign_feed.sh" "$pages" >"$tmp/out" 2>"$tmp/err"; then
+	echo 'directory destination unexpectedly succeeded' >&2
+	exit 1
+fi
+grep -F 'generated destination must not be a directory' "$tmp/err" >/dev/null
+[ ! -e "$pages/Packages.sig" ]
+
+# A trailing slash cannot disguise a symlinked Pages root.
+make_pages
+ln -s "$pages" "$tmp/pages-link"
+if OPENWRT_FEED_USIGN_PRIVATE_KEY="$FAKE_EXPECTED_SECRET" \
+	sh "$root/scripts/sign_feed.sh" "$tmp/pages-link/" >"$tmp/out" 2>"$tmp/err"; then
+	echo 'symlinked Pages root unexpectedly succeeded' >&2
+	exit 1
+fi
+grep -F 'assembled Pages directory with Packages is required' "$tmp/err" >/dev/null
+[ ! -e "$pages/Packages.sig" ]
 
 # Success signs the uncompressed index, verifies it, and publishes trust metadata.
 make_pages
