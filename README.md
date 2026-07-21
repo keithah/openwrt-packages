@@ -16,6 +16,13 @@ wget -qO- https://keithah.github.io/openwrt-packages/install-ookla-speedtest-cli
 curl -fsSL https://keithah.github.io/openwrt-packages/install-ookla-speedtest-cli.sh | sh
 ```
 
+Ookla Speedtest Web:
+
+```sh
+wget -qO- https://keithah.github.io/openwrt-packages/install-ookla-speedtest-web.sh | sh
+curl -fsSL https://keithah.github.io/openwrt-packages/install-ookla-speedtest-web.sh | sh
+```
+
 Starwatch:
 
 ```sh
@@ -40,13 +47,16 @@ The feed carries the latest stable release artifacts for:
 - Starwatch: `starwatchd`, `luci-app-starwatch`, and `gl-app-starwatch`;
 - Wattline: `wattlined`, `wattline-bt`, `wattline-rtl8761b`,
   `luci-app-wattline`, and `gl-app-wattline`; and
-- Speedtest: `ookla-speedtest-cli`.
+- Speedtest: `ookla-speedtest-cli`;
+- Speedtest Web: `ookla-speedtest-webd`, `luci-app-ookla-speedtest-web`, and
+  `gl-app-ookla-speedtest-web`.
 
 Each product remains independently built, tested, and released in its own
 source repository:
 [Starwatch](https://github.com/keithah/openwrt-starwatch),
 [Wattline](https://github.com/keithah/openwrt-wattline), and
 [Ookla Speedtest CLI packaging](https://github.com/keithah/openwrt-ookla-speedtest-cli).
+[Ookla Speedtest Web packaging](https://github.com/keithah/openwrt-ookla-speedtest-web).
 This repository downloads their release assets and installers; it does not
 build or combine product source.
 

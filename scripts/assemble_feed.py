@@ -30,31 +30,37 @@ FIELD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
 PRODUCT_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 REPOSITORY = re.compile(r"^keithah/[A-Za-z0-9._-]+$")
 SAFE_INSTALLER = re.compile(r"^install-[a-z0-9][a-z0-9-]*\.sh$")
+SAFE_RELEASE_INSTALLER = re.compile(r"^(?:install|install-[a-z0-9][a-z0-9-]*)\.sh$")
 SOURCE_PATH = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
 EXPECTED_REPOSITORIES = {
     "starwatch": "keithah/openwrt-starwatch",
     "wattline": "keithah/openwrt-wattline",
     "speedtest": "keithah/openwrt-ookla-speedtest-cli",
+    "speedtest-web": "keithah/openwrt-ookla-speedtest-web",
 }
 EXPECTED_PACKAGES = {
     "starwatch": frozenset({"starwatchd", "luci-app-starwatch", "gl-app-starwatch"}),
     "wattline": frozenset({"wattlined", "wattline-bt", "wattline-rtl8761b", "luci-app-wattline", "gl-app-wattline"}),
     "speedtest": frozenset({"ookla-speedtest-cli"}),
+    "speedtest-web": frozenset({"ookla-speedtest-webd", "luci-app-ookla-speedtest-web", "gl-app-ookla-speedtest-web"}),
 }
 EXPECTED_INSTALLERS = {
     "starwatch": ("install-starwatch.sh", "package/install.sh"),
     "wattline": ("install-wattline.sh", "package/install.sh"),
     "speedtest": ("install-ookla-speedtest-cli.sh", "scripts/install.sh"),
+    "speedtest-web": ("install-ookla-speedtest-web.sh", "install.sh"),
 }
 EXPECTED_RELEASE_INSTALLER_ASSETS = {
     "starwatch": None,
     "wattline": None,
     "speedtest": "install-ookla-speedtest-cli.sh",
+    "speedtest-web": "install.sh",
 }
 EXPECTED_IPK_PATTERNS = {
     "starwatch": r"^(?P<package>starwatchd|luci-app-starwatch|gl-app-starwatch)_(?P<version>[A-Za-z0-9.+~:-]+)_(?P<architecture>aarch64_cortex-a53|all)\.ipk$",
     "wattline": r"^(?P<package>wattlined|wattline-bt|wattline-rtl8761b|luci-app-wattline|gl-app-wattline)_(?P<version>[A-Za-z0-9.+~:-]+)_(?P<architecture>aarch64_cortex-a53|all)\.ipk$",
     "speedtest": r"^(?P<package>ookla-speedtest-cli)_(?P<version>[A-Za-z0-9.+~:-]+)_(?P<architecture>aarch64_cortex-a53)\.ipk$",
+    "speedtest-web": r"^(?P<package>ookla-speedtest-webd|luci-app-ookla-speedtest-web|gl-app-ookla-speedtest-web)_(?P<version>[A-Za-z0-9.+~:-]+)_(?P<architecture>all)\.ipk$",
 }
 
 
@@ -139,7 +145,7 @@ def _validate_manifest(raw: dict) -> list[SourceSpec]:
         if not SAFE_INSTALLER.fullmatch(spec.installer) or not SOURCE_PATH.fullmatch(spec.installer_source):
             raise FeedError("invalid installer path")
         if (spec.release_installer_asset is not None
-                and not SAFE_INSTALLER.fullmatch(spec.release_installer_asset)):
+                and not SAFE_RELEASE_INSTALLER.fullmatch(spec.release_installer_asset)):
             raise FeedError("invalid release installer asset")
         try:
             compiled = spec.ipk_regex
@@ -159,7 +165,7 @@ def _validate_manifest(raw: dict) -> list[SourceSpec]:
             or {spec.product: spec.release_installer_asset for spec in result}
             != EXPECTED_RELEASE_INSTALLER_ASSETS
             or {spec.product: spec.ipk_pattern for spec in result} != EXPECTED_IPK_PATTERNS):
-        raise FeedError("manifest must define the three exact product repositories, packages, installers, and regexes")
+        raise FeedError("manifest must define the four exact product repositories, packages, installers, and regexes")
     return result
 
 

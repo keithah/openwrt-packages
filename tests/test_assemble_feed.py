@@ -69,6 +69,7 @@ class AssembleFeedTest(unittest.TestCase):
             "starwatch": ("starwatchd_1.2.3_aarch64_cortex-a53.ipk", "starwatchd", "aarch64_cortex-a53", "install-starwatch.sh"),
             "wattline": ("wattline-bt_2.0.0_all.ipk", "wattline-bt", "all", "install-wattline.sh"),
             "speedtest": ("ookla-speedtest-cli_1.2.0-1_aarch64_cortex-a53.ipk", "ookla-speedtest-cli", "aarch64_cortex-a53", "install-ookla-speedtest-cli.sh"),
+            "speedtest-web": ("ookla-speedtest-webd_1.0.1_all.ipk", "ookla-speedtest-webd", "all", "install-ookla-speedtest-web.sh"),
         }
         for product, (filename, package, arch, installer) in fixtures.items():
             directory = self.downloads / product
@@ -89,13 +90,15 @@ class AssembleFeedTest(unittest.TestCase):
         self.assertEqual(gzip.decompress((self.output / "Packages.gz").read_bytes()), packages)
         self.assertEqual((self.output / "Packages.gz").read_bytes()[4:8], b"\0\0\0\0")
         expected = {"Packages", "Packages.gz",
-                    "install-starwatch.sh", "install-wattline.sh", "install-ookla-speedtest-cli.sh"}
+                    "install-starwatch.sh", "install-wattline.sh", "install-ookla-speedtest-cli.sh", "install-ookla-speedtest-web.sh"}
         expected |= {p.name for p in self.downloads.glob("*/*.ipk")}
         self.assertEqual({p.name for p in self.output.iterdir()}, expected)
-        for installer in ("install-starwatch.sh", "install-wattline.sh", "install-ookla-speedtest-cli.sh"):
+        for installer in ("install-starwatch.sh", "install-wattline.sh", "install-ookla-speedtest-cli.sh", "install-ookla-speedtest-web.sh"):
             product = installer.removeprefix("install-").removesuffix(".sh")
             if product == "ookla-speedtest-cli":
                 product = "speedtest"
+            elif product == "ookla-speedtest-web":
+                product = "speedtest-web"
             copied = self.output / installer
             self.assertEqual(copied.read_bytes(), (self.downloads / product / installer).read_bytes())
             self.assertEqual(copied.stat().st_mode & 0o777, 0o755)
@@ -160,7 +163,7 @@ class AssembleFeedTest(unittest.TestCase):
 
     def test_manifest_is_strict_and_names_exact_repositories(self):
         repos = {item["repository"] for item in self.manifest["sources"]}
-        self.assertEqual(repos, {"keithah/openwrt-starwatch", "keithah/openwrt-wattline", "keithah/openwrt-ookla-speedtest-cli"})
+        self.assertEqual(repos, {"keithah/openwrt-starwatch", "keithah/openwrt-wattline", "keithah/openwrt-ookla-speedtest-cli", "keithah/openwrt-ookla-speedtest-web"})
         release_installers = {
             item["product"]: item["release_installer_asset"]
             for item in self.manifest["sources"]
@@ -169,13 +172,14 @@ class AssembleFeedTest(unittest.TestCase):
             "starwatch": None,
             "wattline": None,
             "speedtest": "install-ookla-speedtest-cli.sh",
+            "speedtest-web": "install.sh",
         })
         bad = self.base / "bad.json"
         bad.write_text(json.dumps({"sources": [], "extra": True}))
         with self.assertRaises(FeedError):
             load_manifest(bad)
         bad.write_text(json.dumps({"sources": [self.manifest["sources"][0]]}))
-        with self.assertRaisesRegex(FeedError, "three exact"):
+        with self.assertRaisesRegex(FeedError, "four exact"):
             load_manifest(bad)
 
     def test_rejects_duplicate_json_keys_at_root_and_source_levels(self):
@@ -191,7 +195,7 @@ class AssembleFeedTest(unittest.TestCase):
 
     def test_assemble_revalidates_dict_and_rejects_manifest_subset(self):
         subset = {"sources": self.manifest["sources"][:2]}
-        with self.assertRaisesRegex(FeedError, "three exact"):
+        with self.assertRaisesRegex(FeedError, "four exact"):
             assemble(self.downloads, self.output, subset)
         with self.assertRaisesRegex(FeedError, "manifest"):
             assemble(self.downloads, self.output, list(self.manifest["sources"]))

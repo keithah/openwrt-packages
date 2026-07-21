@@ -161,7 +161,7 @@ class WorkflowPolicyTest(unittest.TestCase):
         self.assertIn("https://keithah.github.io/openwrt-packages", readme)
         self.assertIn("aarch64_cortex-a53", readme)
         self.assertIn("f6c72c675c844b91", readme)
-        for product in ("starwatch", "wattline", "ookla-speedtest-cli"):
+        for product in ("starwatch", "wattline", "ookla-speedtest-cli", "ookla-speedtest-web"):
             installer = f"install-{product}.sh"
             url = f"https://keithah.github.io/openwrt-packages/{installer}"
             self.assertIn(f"wget -qO- {url} | sh", readme)
@@ -170,12 +170,14 @@ class WorkflowPolicyTest(unittest.TestCase):
             "keithah/openwrt-starwatch",
             "keithah/openwrt-wattline",
             "keithah/openwrt-ookla-speedtest-cli",
+            "keithah/openwrt-ookla-speedtest-web",
         ):
             self.assertIn(f"https://github.com/{repository}", readme)
         for package in (
             "starwatchd", "luci-app-starwatch", "gl-app-starwatch", "wattlined",
             "wattline-bt", "wattline-rtl8761b", "luci-app-wattline",
             "gl-app-wattline", "ookla-speedtest-cli",
+            "ookla-speedtest-webd", "luci-app-ookla-speedtest-web", "gl-app-ookla-speedtest-web",
         ):
             self.assertIn(f"`{package}`", readme)
         for phrase in ("hourly", "manually", "fails the whole", "last verified", "no Ookla binary", "EULA"):

@@ -72,8 +72,8 @@ def _manifest_sources(manifest_path: Path) -> list[dict]:
     except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, FeedError) as exc:
         raise InventoryError(f"invalid manifest: {exc}") from exc
     installers = {source["installer"] for source in sources}
-    if installers != {"install-starwatch.sh", "install-wattline.sh", "install-ookla-speedtest-cli.sh"}:
-        raise InventoryError("manifest must name exactly three expected installers")
+    if installers != {"install-starwatch.sh", "install-wattline.sh", "install-ookla-speedtest-cli.sh", "install-ookla-speedtest-web.sh"}:
+        raise InventoryError("manifest must name exactly four expected installers")
     return sources
 
 
@@ -199,7 +199,7 @@ class InventoryValidatorTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.pages = Path(self.temp.name) / "pages"
         self.pages.mkdir()
-        installers = ("install-starwatch.sh", "install-wattline.sh", "install-ookla-speedtest-cli.sh")
+        installers = ("install-starwatch.sh", "install-wattline.sh", "install-ookla-speedtest-cli.sh", "install-ookla-speedtest-web.sh")
         for name in installers:
             path = self.pages / name
             path.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -209,6 +209,7 @@ class InventoryValidatorTest(unittest.TestCase):
             ("starwatchd_1.2.3_aarch64_cortex-a53.ipk", "starwatchd", "1.2.3", "aarch64_cortex-a53"),
             ("wattline-bt_2.0.0_all.ipk", "wattline-bt", "2.0.0", "all"),
             ("ookla-speedtest-cli_1.2.0-1_aarch64_cortex-a53.ipk", "ookla-speedtest-cli", "1.2.0-1", "aarch64_cortex-a53"),
+            ("ookla-speedtest-webd_1.0.1_all.ipk", "ookla-speedtest-webd", "1.0.1", "all"),
         )
         for filename, package, version, arch in fixtures:
             ipk = self.pages / filename

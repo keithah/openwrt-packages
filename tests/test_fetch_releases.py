@@ -122,12 +122,12 @@ class FetchReleasesTest(unittest.TestCase):
             )
             installer = f"#!/bin/sh\n# {product} {tag}\n".encode()
             self.payloads[(product, source["installer"])] = installer
-            if product == "speedtest":
+            if source["release_installer_asset"]:
                 installer_asset_url = (
                     f"https://api.github.com/repos/{repository}/releases/assets/{asset_id}"
                 )
                 assets.append({
-                    "id": asset_id, "name": source["installer"], "url": installer_asset_url,
+                    "id": asset_id, "name": source["release_installer_asset"], "url": installer_asset_url,
                 })
                 self.routes[installer_asset_url] = FakeResponse(
                     installer,
