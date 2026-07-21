@@ -16,15 +16,17 @@ class WorkflowCliEntrypointTest(unittest.TestCase):
         steps = workflow["jobs"]["build"]["steps"]
         by_name = {step.get("name"): step for step in steps}
 
-        for name in (
-            "Fetch immutable releases",
-            "Assemble feed",
-            "Validate deployable inventory",
-        ):
+        expected_entrypoints = {
+            "Fetch immutable releases": ["python3", "-m", "scripts.fetch_releases"],
+            "Assemble feed": ["python3", "-m", "scripts.assemble_feed"],
+            "Validate deployable inventory": ["python3", "-m", "tests.inventory_test"],
+        }
+        for name, expected_entrypoint in expected_entrypoints.items():
             with self.subTest(step=name):
                 command = shlex.split(by_name[name]["run"])
+                self.assertEqual(command[:3], expected_entrypoint)
                 result = subprocess.run(
-                    [*command[:3], "--help"] if command[1] == "-m" else [*command[:2], "--help"],
+                    [*expected_entrypoint, "--help"],
                     cwd=ROOT,
                     text=True,
                     capture_output=True,

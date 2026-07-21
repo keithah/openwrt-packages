@@ -27,6 +27,22 @@ def steps(job: dict) -> list[dict]:
 
 
 class WorkflowPolicyTest(unittest.TestCase):
+    def assert_publisher_commands_are_exact(self, workflow: dict) -> None:
+        build_steps = steps(workflow["jobs"]["build"])
+        by_name = {item.get("name", ""): item for item in build_steps}
+        self.assertEqual(
+            by_name["Fetch immutable releases"]["run"],
+            "python3 -m scripts.fetch_releases --manifest sources.json --destination downloads",
+        )
+        self.assertEqual(
+            "python3 -m scripts.assemble_feed --manifest sources.json --downloads downloads --output pages",
+            by_name["Assemble feed"]["run"],
+        )
+        self.assertEqual(
+            by_name["Validate deployable inventory"]["run"],
+            "python3 -m tests.inventory_test pages",
+        )
+
     def test_ci_is_read_only_and_runs_every_local_test(self):
         workflow, text = load_workflow("test.yml")
         self.assertEqual(set(workflow["on"]), {"push", "pull_request"})
@@ -106,10 +122,7 @@ class WorkflowPolicyTest(unittest.TestCase):
         verify = build_steps[names.index("Verify signature with usign")]["run"]
         for argument in ("-V", "pages/Packages", "pages/keithah-feed.pub", "pages/Packages.sig"):
             self.assertIn(argument, verify)
-        self.assertEqual(
-            build_steps[names.index("Validate deployable inventory")]["run"],
-            "python3 -m tests.inventory_test pages",
-        )
+        self.assert_publisher_commands_are_exact(workflow)
 
         upload = build_steps[names.index("Upload Pages artifact")]
         self.assertEqual(upload.get("uses"), "actions/upload-pages-artifact@v5")
@@ -122,14 +135,14 @@ class WorkflowPolicyTest(unittest.TestCase):
         self.assertEqual(text.count("secrets.OPENWRT_FEED_USIGN_PRIVATE_KEY"), 2)
         fetch = build_steps[names.index("Fetch immutable releases")]
         self.assertEqual(fetch.get("env"), {"GH_TOKEN": "${{ github.token }}"})
-        self.assertEqual(
-            fetch["run"],
-            "python3 -m scripts.fetch_releases --manifest sources.json --destination downloads",
-        )
-        self.assertIn(
-            "python3 -m scripts.assemble_feed --manifest sources.json --downloads downloads --output pages",
-            build_steps[names.index("Assemble feed")]["run"],
-        )
+
+    def test_publisher_command_policy_rejects_appended_arguments(self):
+        workflow, _ = load_workflow("pages.yml")
+        build_steps = steps(workflow["jobs"]["build"])
+        assembler = next(item for item in build_steps if item.get("name") == "Assemble feed")
+        assembler["run"] += " --unexpected"
+        with self.assertRaises(AssertionError):
+            self.assert_publisher_commands_are_exact(workflow)
 
     def test_current_official_action_majors_are_used(self):
         ci, _ = load_workflow("test.yml")
