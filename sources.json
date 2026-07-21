@@ -1,0 +1,25 @@
+{
+  "sources": [
+    {
+      "product": "starwatch",
+      "repository": "keithah/openwrt-starwatch",
+      "ipk_pattern": "^(?:starwatchd|luci-app-starwatch|gl-app-starwatch)_[A-Za-z0-9.+~:-]+_(?:aarch64_cortex-a53|all)\\.ipk$",
+      "installer": "install-starwatch.sh",
+      "installer_source": "package/install.sh"
+    },
+    {
+      "product": "wattline",
+      "repository": "keithah/openwrt-wattline",
+      "ipk_pattern": "^(?:wattlined|wattline-bt|wattline-rtl8761b|luci-app-wattline|gl-app-wattline)_[A-Za-z0-9.+~:-]+_(?:aarch64_cortex-a53|all)\\.ipk$",
+      "installer": "install-wattline.sh",
+      "installer_source": "package/install.sh"
+    },
+    {
+      "product": "speedtest",
+      "repository": "keithah/openwrt-ookla-speedtest-cli",
+      "ipk_pattern": "^ookla-speedtest-cli_[A-Za-z0-9.+~:-]+_aarch64_cortex-a53\\.ipk$",
+      "installer": "install-ookla-speedtest-cli.sh",
+      "installer_source": "scripts/install.sh"
+    }
+  ]
+}
