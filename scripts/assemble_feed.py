@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import dataclass
 import gzip
 import hashlib
@@ -15,7 +16,6 @@ import re
 import shutil
 import tarfile
 import tempfile
-from typing import Iterable
 
 
 ALLOWED_ARCHITECTURES = frozenset({"aarch64_cortex-a53", "all"})
@@ -24,6 +24,8 @@ MAX_TAR_SIZE = 128 * 1024 * 1024
 MAX_CONTROL_SIZE = 1024 * 1024
 MAX_INSTALLER_SIZE = 1024 * 1024
 MAX_MEMBERS = 128
+MAX_DATA_MEMBER_SIZE = 16 * 1024 * 1024
+MAX_DATA_TOTAL_SIZE = 128 * 1024 * 1024
 FIELD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
 PRODUCT_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 REPOSITORY = re.compile(r"^keithah/[A-Za-z0-9._-]+$")
@@ -33,6 +35,16 @@ EXPECTED_REPOSITORIES = {
     "starwatch": "keithah/openwrt-starwatch",
     "wattline": "keithah/openwrt-wattline",
     "speedtest": "keithah/openwrt-ookla-speedtest-cli",
+}
+EXPECTED_PACKAGES = {
+    "starwatch": frozenset({"starwatchd", "luci-app-starwatch", "gl-app-starwatch"}),
+    "wattline": frozenset({"wattlined", "wattline-bt", "wattline-rtl8761b", "luci-app-wattline", "gl-app-wattline"}),
+    "speedtest": frozenset({"ookla-speedtest-cli"}),
+}
+EXPECTED_INSTALLERS = {
+    "starwatch": ("install-starwatch.sh", "package/install.sh"),
+    "wattline": ("install-wattline.sh", "package/install.sh"),
+    "speedtest": ("install-ookla-speedtest-cli.sh", "scripts/install.sh"),
 }
 
 
@@ -44,6 +56,7 @@ class FeedError(ValueError):
 class SourceSpec:
     product: str
     repository: str
+    packages: tuple[str, ...]
     ipk_pattern: str
     installer: str
     installer_source: str
@@ -73,41 +86,67 @@ class PackageRecord:
         return "".join(f"{name}: {value}\n" for name, value in fields) + "\n"
 
 
-def load_manifest(path: Path) -> list[SourceSpec]:
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise FeedError(f"invalid manifest: {exc}") from exc
+def _object_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise FeedError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _validate_manifest(raw: dict) -> list[SourceSpec]:
     if not isinstance(raw, dict) or set(raw) != {"sources"} or not isinstance(raw["sources"], list):
         raise FeedError("manifest must contain only a sources array")
-    required = {"product", "repository", "ipk_pattern", "installer", "installer_source"}
+    required = {"product", "repository", "packages", "ipk_pattern", "installer", "installer_source"}
     result = []
     products = set()
     installers = set()
     for item in raw["sources"]:
-        if not isinstance(item, dict) or set(item) != required or not all(isinstance(item[k], str) for k in required):
+        if (not isinstance(item, dict) or set(item) != required
+                or not all(isinstance(item[k], str) for k in required - {"packages"})
+                or not isinstance(item["packages"], list)
+                or not item["packages"]
+                or not all(isinstance(package, str) for package in item["packages"])):
             raise FeedError("manifest source has unexpected or invalid fields")
-        spec = SourceSpec(**item)
+        spec = SourceSpec(
+            product=item["product"], repository=item["repository"],
+            packages=tuple(item["packages"]), ipk_pattern=item["ipk_pattern"],
+            installer=item["installer"], installer_source=item["installer_source"],
+        )
         if not PRODUCT_NAME.fullmatch(spec.product) or not REPOSITORY.fullmatch(spec.repository):
             raise FeedError("invalid product or repository")
+        if (len(spec.packages) != len(set(spec.packages))
+                or any(not PRODUCT_NAME.fullmatch(package) for package in spec.packages)):
+            raise FeedError("invalid or duplicate package allowlist")
         if not SAFE_INSTALLER.fullmatch(spec.installer) or not SOURCE_PATH.fullmatch(spec.installer_source):
             raise FeedError("invalid installer path")
         try:
             compiled = spec.ipk_regex
         except re.error as exc:
             raise FeedError(f"invalid IPK pattern: {exc}") from exc
-        if not spec.ipk_pattern.startswith("^") or not spec.ipk_pattern.endswith("$") or compiled.match(""):
-            raise FeedError("IPK pattern must be anchored and nonempty")
+        if (not spec.ipk_pattern.startswith("^") or not spec.ipk_pattern.endswith("$")
+                or compiled.match("") or set(compiled.groupindex) != {"package", "version", "architecture"}):
+            raise FeedError("IPK pattern must be anchored with package, version, and architecture captures")
         if spec.product in products or spec.installer in installers:
             raise FeedError("duplicate manifest product or installer")
         products.add(spec.product)
         installers.add(spec.installer)
         result.append(spec)
-    if not result:
-        raise FeedError("manifest has no sources")
-    if {spec.product: spec.repository for spec in result} != EXPECTED_REPOSITORIES:
-        raise FeedError("manifest must define the three exact product repositories")
+    if ({spec.product: spec.repository for spec in result} != EXPECTED_REPOSITORIES
+            or {spec.product: frozenset(spec.packages) for spec in result} != EXPECTED_PACKAGES
+            or {spec.product: (spec.installer, spec.installer_source) for spec in result} != EXPECTED_INSTALLERS):
+        raise FeedError("manifest must define the three exact product repositories, packages, and installers")
     return result
+
+
+def load_manifest(path: Path) -> dict:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_object_without_duplicate_keys)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise FeedError(f"invalid manifest: {exc}") from exc
+    _validate_manifest(raw)
+    return raw
 
 
 def _bounded_gzip(data: bytes, label: str, limit: int = MAX_TAR_SIZE) -> bytes:
@@ -124,6 +163,8 @@ def _bounded_gzip(data: bytes, label: str, limit: int = MAX_TAR_SIZE) -> bytes:
 
 
 def _safe_name(name: str, *, directory: bool = False) -> bool:
+    if "\\" in name or "\0" in name:
+        return False
     normalized = name[2:] if name.startswith("./") else name
     if directory and normalized in ("", "."):
         return True
@@ -132,13 +173,21 @@ def _safe_name(name: str, *, directory: bool = False) -> bool:
     return bool(normalized) and not normalized.startswith("/") and all(p not in ("", ".", "..") for p in parts)
 
 
-def _ustar_members(raw: bytes, label: str, *, allow_directories: bool = False) -> list[tuple[tarfile.TarInfo, bytes]]:
+def _ustar_members(
+    raw: bytes,
+    label: str,
+    *,
+    allow_directories: bool = False,
+    max_member_size: int = MAX_TAR_SIZE,
+    max_total_size: int = MAX_TAR_SIZE,
+) -> list[tuple[tarfile.TarInfo, bytes]]:
     if len(raw) < 1024 or len(raw) % 512:
         raise FeedError(f"malformed {label} ustar archive")
     # Walk physical headers because tarfile intentionally hides pax/GNU
     # extension records from getmembers().
     offset = 0
     headers = []
+    total_size = 0
     while offset + 512 <= len(raw):
         block = raw[offset:offset + 512]
         if block == b"\0" * 512:
@@ -158,6 +207,11 @@ def _ustar_members(raw: bytes, label: str, *, allow_directories: bool = False) -
             size = int(size_field, 8)
         except ValueError as exc:
             raise FeedError(f"malformed {label} member size") from exc
+        if size > max_member_size:
+            raise FeedError(f"member size limit exceeded in {label}")
+        total_size += size
+        if total_size > max_total_size:
+            raise FeedError(f"total member size limit exceeded in {label}")
         headers.append(offset)
         offset += 512 + ((size + 511) // 512) * 512
         if len(headers) > MAX_MEMBERS:
@@ -231,18 +285,34 @@ def _read_ipk(path: Path) -> PackageRecord:
         compressed = path.read_bytes()
     except OSError as exc:
         raise FeedError(f"cannot read IPK {path.name}: {exc}") from exc
-    outer = _ustar_members(_bounded_gzip(compressed, "IPK"), "IPK")
-    members = {(i.name[2:] if i.name.startswith("./") else i.name): data for i, data in outer}
-    if set(members) != {"debian-binary", "control.tar.gz", "data.tar.gz"} or members["debian-binary"] != b"2.0\n":
-        raise FeedError("IPK outer archive has unexpected members")
+    outer = _ustar_members(
+        _bounded_gzip(compressed, "IPK"), "IPK",
+        max_member_size=MAX_IPK_SIZE, max_total_size=MAX_TAR_SIZE,
+    )
+    normalized_outer = [(i.name[2:] if i.name.startswith("./") else i.name, data) for i, data in outer]
+    expected_outer = {"debian-binary", "control.tar.gz", "data.tar.gz"}
+    counts = Counter(name for name, _ in normalized_outer)
+    if set(counts) != expected_outer or any(counts[name] != 1 for name in expected_outer):
+        raise FeedError("IPK outer archive must contain exactly the three expected names once each")
+    members = dict(normalized_outer)
+    if members["debian-binary"] != b"2.0\n":
+        raise FeedError("IPK outer archive has invalid debian-binary")
     control_members = _ustar_members(
         _bounded_gzip(members["control.tar.gz"], "control archive"),
         "control archive",
         allow_directories=True,
+        max_member_size=MAX_CONTROL_SIZE,
+        max_total_size=4 * MAX_CONTROL_SIZE,
     )
     controls = [data for info, data in control_members if (info.name[2:] if info.name.startswith("./") else info.name) == "control"]
     if len(controls) != 1:
         raise FeedError("control archive must contain exactly one control file")
+    data_raw = _bounded_gzip(members["data.tar.gz"], "data archive", MAX_DATA_TOTAL_SIZE)
+    _ustar_members(
+        data_raw, "data archive", allow_directories=True,
+        max_member_size=MAX_DATA_MEMBER_SIZE,
+        max_total_size=MAX_DATA_TOTAL_SIZE,
+    )
     fields = _parse_control(controls[0])
     values = {name.lower(): value for name, value in fields}
     return PackageRecord(values["package"], values["version"], values["architecture"],
@@ -275,12 +345,10 @@ def _replace_output(staging: Path, output: Path) -> None:
         shutil.rmtree(backup)
 
 
-def assemble(download_root: Path, output: Path, manifest: Iterable[SourceSpec] | dict) -> list[PackageRecord]:
+def assemble(download_root: Path, output: Path, manifest: dict) -> list[PackageRecord]:
     download_root = Path(download_root)
     output = Path(output)
-    if isinstance(manifest, dict):
-        raise FeedError("manifest must be loaded and validated")
-    specs = list(manifest)
+    specs = _validate_manifest(manifest)
     try:
         output_resolved = output.resolve()
         download_resolved = download_root.resolve()
@@ -295,6 +363,8 @@ def assemble(download_root: Path, output: Path, manifest: Iterable[SourceSpec] |
     records = []
     filenames = set()
     tuples = set()
+    pending = []
+    product_installers = []
     try:
         # A collision is fatal even when the second product's own regex would
         # reject that name; otherwise validation order could mask ambiguity.
@@ -317,12 +387,14 @@ def assemble(download_root: Path, output: Path, manifest: Iterable[SourceSpec] |
                 raise FeedError(f"product {spec.product} must have exactly one expected installer")
             if installers[0].stat().st_size > MAX_INSTALLER_SIZE:
                 raise FeedError(f"installer exceeds size limit for {spec.product}")
+            product_installers.append((spec, installers[0]))
             ipks = [p for p in entries if p.suffix == ".ipk"]
             unexpected = [p.name for p in entries if p not in installers and p not in ipks]
             if unexpected or not ipks:
                 raise FeedError(f"missing IPKs or unexpected filename for {spec.product}")
             for ipk in sorted(ipks):
-                if not spec.ipk_regex.fullmatch(ipk.name):
+                match = spec.ipk_regex.fullmatch(ipk.name)
+                if match is None:
                     raise FeedError(f"unexpected IPK filename: {ipk.name}")
                 if ipk.name in filenames:
                     raise FeedError(f"duplicate filename: {ipk.name}")
@@ -334,12 +406,25 @@ def assemble(download_root: Path, output: Path, manifest: Iterable[SourceSpec] |
                     raise FeedError(f"duplicate package tuple: {key}")
                 filenames.add(ipk.name)
                 tuples.add(key)
-                records.append(record)
-                _copy_file(ipk, staging / ipk.name)
-                if not (staging / ipk.name).is_file():
-                    raise FeedError(f"indexed file missing from output: {ipk.name}")
-                os.chmod(staging / ipk.name, 0o644)
-            _copy_file(installers[0], staging / spec.installer)
+                pending.append((spec, ipk, match, record))
+        # Detect tuple collisions across the entire candidate set before the
+        # more specific filename/allowlist diagnostics can mask them.
+        for spec, ipk, match, record in pending:
+            if record.package not in spec.packages:
+                raise FeedError(f"control Package is outside the product allowlist: {record.package}")
+            for field, actual in (("Package", record.package), ("Version", record.version),
+                                  ("Architecture", record.architecture)):
+                if actual != match.group(field.lower()):
+                    raise FeedError(f"control {field} does not match filename: {ipk.name}")
+            records.append(record)
+            _copy_file(ipk, staging / ipk.name)
+            if not (staging / ipk.name).is_file():
+                raise FeedError(f"indexed file missing from output: {ipk.name}")
+            os.chmod(staging / ipk.name, 0o644)
+        for spec, installer in product_installers:
+            _copy_file(installer, staging / spec.installer)
+            if not (staging / spec.installer).is_file():
+                raise FeedError(f"installer missing from output: {spec.installer}")
             os.chmod(staging / spec.installer, 0o755)
         records.sort(key=lambda r: (r.package, r.version, r.architecture, r.filename))
         payload = "".join(record.render() for record in records).encode("utf-8")

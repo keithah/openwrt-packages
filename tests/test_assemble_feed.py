@@ -39,18 +39,20 @@ def _tar(members, *, fmt=tarfile.USTAR_FORMAT):
 
 def make_ipk(path, package, version="1.0-1", arch="all", *,
              outer_format=tarfile.USTAR_FORMAT, control_format=tarfile.USTAR_FORMAT,
-             control_name="./control", control_override=None):
+             control_name="./control", control_override=None,
+             data_override=None, outer_extra=(), control_extra=()):
     control = control_override or (
         f"Package: {package}\nVersion: {version}\nArchitecture: {arch}\n"
         "Description: first line\n second line\n"
     ).encode()
-    control_tar = _tar([(control_name, control, "file")], fmt=control_format)
+    control_tar = _tar([(control_name, control, "file"), *control_extra], fmt=control_format)
     control_gz = gzip.compress(control_tar, mtime=0)
-    data_gz = gzip.compress(_tar([], fmt=tarfile.USTAR_FORMAT), mtime=0)
+    data_gz = data_override if data_override is not None else gzip.compress(_tar([], fmt=tarfile.USTAR_FORMAT), mtime=0)
     outer = _tar([
         ("./debian-binary", b"2.0\n", "file"),
         ("./control.tar.gz", control_gz, "file"),
         ("./data.tar.gz", data_gz, "file"),
+        *outer_extra,
     ], fmt=outer_format)
     path.write_bytes(gzip.compress(outer, mtime=0))
 
@@ -71,8 +73,10 @@ class AssembleFeedTest(unittest.TestCase):
         for product, (filename, package, arch, installer) in fixtures.items():
             directory = self.downloads / product
             directory.mkdir(parents=True)
-            make_ipk(directory / filename, package, arch=arch)
+            version = filename.removeprefix(package + "_").removesuffix("_" + arch + ".ipk")
+            make_ipk(directory / filename, package, version=version, arch=arch)
             (directory / installer).write_text(f"#!/bin/sh\n# {product}\n")
+            (directory / installer).chmod(0o600)
 
     def test_assembles_deterministic_sorted_index_and_exact_inventory(self):
         records = assemble(self.downloads, self.output, self.manifest)
@@ -88,6 +92,13 @@ class AssembleFeedTest(unittest.TestCase):
                     "install-starwatch.sh", "install-wattline.sh", "install-ookla-speedtest-cli.sh"}
         expected |= {p.name for p in self.downloads.glob("*/*.ipk")}
         self.assertEqual({p.name for p in self.output.iterdir()}, expected)
+        for installer in ("install-starwatch.sh", "install-wattline.sh", "install-ookla-speedtest-cli.sh"):
+            product = installer.removeprefix("install-").removesuffix(".sh")
+            if product == "ookla-speedtest-cli":
+                product = "speedtest"
+            copied = self.output / installer
+            self.assertEqual(copied.read_bytes(), (self.downloads / product / installer).read_bytes())
+            self.assertEqual(copied.stat().st_mode & 0o777, 0o755)
         for ipk in self.downloads.glob("*/*.ipk"):
             self.assertIn(f"Filename: {ipk.name}\n", packages.decode())
             self.assertIn(f"Size: {ipk.stat().st_size}\n", packages.decode())
@@ -118,7 +129,7 @@ class AssembleFeedTest(unittest.TestCase):
         self.assert_rejected("architecture")
 
     def test_rejects_duplicates_by_tuple_and_filename(self):
-        make_ipk(self.downloads / "starwatch" / "luci-app-starwatch_1.2.3_all.ipk", "wattline-bt", version="1.0-1")
+        make_ipk(self.downloads / "starwatch" / "luci-app-starwatch_1.2.3_all.ipk", "wattline-bt", version="2.0.0")
         self.assert_rejected("duplicate package tuple")
         self.setUp()
         duplicate = self.downloads / "wattline" / "starwatchd_1.2.3_aarch64_cortex-a53.ipk"
@@ -148,19 +159,105 @@ class AssembleFeedTest(unittest.TestCase):
         self.assert_rejected("indexed file")
 
     def test_manifest_is_strict_and_names_exact_repositories(self):
-        repos = {item.repository for item in self.manifest}
+        repos = {item["repository"] for item in self.manifest["sources"]}
         self.assertEqual(repos, {"keithah/openwrt-starwatch", "keithah/openwrt-wattline", "keithah/openwrt-ookla-speedtest-cli"})
         bad = self.base / "bad.json"
         bad.write_text(json.dumps({"sources": [], "extra": True}))
         with self.assertRaises(FeedError):
             load_manifest(bad)
-        bad.write_text(json.dumps({"sources": [vars(self.manifest[0])]}))
+        bad.write_text(json.dumps({"sources": [self.manifest["sources"][0]]}))
         with self.assertRaisesRegex(FeedError, "three exact"):
             load_manifest(bad)
 
+    def test_rejects_duplicate_json_keys_at_root_and_source_levels(self):
+        bad = self.base / "bad.json"
+        bad.write_text('{"sources": [], "sources": []}')
+        with self.assertRaisesRegex(FeedError, "duplicate JSON key"):
+            load_manifest(bad)
+        source = self.manifest["sources"][0]
+        encoded = json.dumps(source)[1:-1]
+        bad.write_text('{"sources": [{' + encoded + ', "product": "evil"}]}')
+        with self.assertRaisesRegex(FeedError, "duplicate JSON key"):
+            load_manifest(bad)
+
+    def test_assemble_revalidates_dict_and_rejects_manifest_subset(self):
+        subset = {"sources": self.manifest["sources"][:2]}
+        with self.assertRaisesRegex(FeedError, "three exact"):
+            assemble(self.downloads, self.output, subset)
+        with self.assertRaisesRegex(FeedError, "manifest"):
+            assemble(self.downloads, self.output, list(self.manifest["sources"]))
+        changed = json.loads(json.dumps(self.manifest))
+        changed["sources"][0]["installer"] = "install-other.sh"
+        with self.assertRaisesRegex(FeedError, "exact product"):
+            assemble(self.downloads, self.output, changed)
+
+    def test_rejects_control_metadata_that_disagrees_with_filename(self):
+        target = next((self.downloads / "starwatch").glob("*.ipk"))
+        make_ipk(target, "luci-app-starwatch", version="1.2.3", arch="aarch64_cortex-a53")
+        self.assert_rejected("Package.*filename")
+        self.setUp()
+        target = next((self.downloads / "starwatch").glob("*.ipk"))
+        make_ipk(target, "starwatchd", version="9.9-1", arch="aarch64_cortex-a53")
+        self.assert_rejected("Version.*filename")
+        self.setUp()
+        target = next((self.downloads / "starwatch").glob("*.ipk"))
+        make_ipk(target, "starwatchd", version="1.2.3", arch="all")
+        self.assert_rejected("Architecture.*filename")
+
+    def test_rejects_duplicate_outer_and_control_members(self):
+        target = next((self.downloads / "starwatch").glob("*.ipk"))
+        make_ipk(target, "starwatchd", arch="aarch64_cortex-a53",
+                 outer_extra=(("./control.tar.gz", b"duplicate", "file"),))
+        self.assert_rejected("once each")
+        self.setUp()
+        target = next((self.downloads / "starwatch").glob("*.ipk"))
+        control = b"Package: starwatchd\nVersion: 1.2.3\nArchitecture: aarch64_cortex-a53\n"
+        make_ipk(target, "starwatchd", arch="aarch64_cortex-a53",
+                 control_extra=(("control", control, "file"),))
+        self.assert_rejected("exactly one control")
+
+    def test_rejects_malformed_pax_and_unsafe_data_archives(self):
+        target = next((self.downloads / "starwatch").glob("*.ipk"))
+        make_ipk(target, "starwatchd", arch="aarch64_cortex-a53", data_override=b"not-gzip")
+        self.assert_rejected("data archive")
+        self.setUp()
+        target = next((self.downloads / "starwatch").glob("*.ipk"))
+        pax = gzip.compress(_tar([("./usr/bin/x", b"x", "file")], fmt=tarfile.PAX_FORMAT), mtime=0)
+        make_ipk(target, "starwatchd", arch="aarch64_cortex-a53", data_override=pax)
+        self.assert_rejected("data archive.*ustar")
+        self.setUp()
+        target = next((self.downloads / "starwatch").glob("*.ipk"))
+        traversal = gzip.compress(_tar([("../escape", b"x", "file")]), mtime=0)
+        make_ipk(target, "starwatchd", arch="aarch64_cortex-a53", data_override=traversal)
+        self.assert_rejected("unsafe member.*data archive")
+        self.setUp()
+        target = next((self.downloads / "starwatch").glob("*.ipk"))
+        link = gzip.compress(_tar([("./usr/bin/x", b"", "symlink")]), mtime=0)
+        make_ipk(target, "starwatchd", arch="aarch64_cortex-a53", data_override=link)
+        self.assert_rejected("extended member.*data archive")
+
+    def test_rejects_data_archive_member_count_and_member_size_abuse(self):
+        target = next((self.downloads / "starwatch").glob("*.ipk"))
+        many = [(f"./usr/share/{i}", b"", "file") for i in range(129)]
+        make_ipk(target, "starwatchd", arch="aarch64_cortex-a53",
+                 data_override=gzip.compress(_tar(many), mtime=0))
+        self.assert_rejected("too many members.*data archive")
+        self.setUp()
+        target = next((self.downloads / "starwatch").glob("*.ipk"))
+        # Patch the declared size without allocating a giant fixture; tarfile
+        # must still be forced through the bounded member-size check.
+        raw = bytearray(_tar([("./usr/bin/x", b"x", "file")]))
+        raw[124:136] = b"100000001\0\0\0"  # 16 MiB + 1, octal
+        raw[148:156] = b"        "
+        checksum = sum(raw[:512])
+        raw[148:156] = f"{checksum:06o}\0 ".encode()
+        make_ipk(target, "starwatchd", arch="aarch64_cortex-a53",
+                 data_override=gzip.compress(bytes(raw), mtime=0))
+        self.assert_rejected("member size.*data archive")
+
     def test_accepts_safe_control_directories_but_rejects_links(self):
         target = next((self.downloads / "starwatch").glob("*.ipk"))
-        control = b"Package: starwatchd\nVersion: 1.0-1\nArchitecture: aarch64_cortex-a53\n"
+        control = b"Package: starwatchd\nVersion: 1.2.3\nArchitecture: aarch64_cortex-a53\n"
         inner = _tar([("./", b"", "dir"), ("./control", control, "file")])
         outer = _tar([
             ("./debian-binary", b"2.0\n", "file"),
