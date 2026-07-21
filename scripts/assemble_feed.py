@@ -46,6 +46,11 @@ EXPECTED_INSTALLERS = {
     "wattline": ("install-wattline.sh", "package/install.sh"),
     "speedtest": ("install-ookla-speedtest-cli.sh", "scripts/install.sh"),
 }
+EXPECTED_RELEASE_INSTALLER_ASSETS = {
+    "starwatch": None,
+    "wattline": None,
+    "speedtest": "install-ookla-speedtest-cli.sh",
+}
 EXPECTED_IPK_PATTERNS = {
     "starwatch": r"^(?P<package>starwatchd|luci-app-starwatch|gl-app-starwatch)_(?P<version>[A-Za-z0-9.+~:-]+)_(?P<architecture>aarch64_cortex-a53|all)\.ipk$",
     "wattline": r"^(?P<package>wattlined|wattline-bt|wattline-rtl8761b|luci-app-wattline|gl-app-wattline)_(?P<version>[A-Za-z0-9.+~:-]+)_(?P<architecture>aarch64_cortex-a53|all)\.ipk$",
@@ -65,6 +70,7 @@ class SourceSpec:
     ipk_pattern: str
     installer: str
     installer_source: str
+    release_installer_asset: str | None
 
     @property
     def ipk_regex(self) -> re.Pattern[str]:
@@ -103,21 +109,27 @@ def _object_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
 def _validate_manifest(raw: dict) -> list[SourceSpec]:
     if not isinstance(raw, dict) or set(raw) != {"sources"} or not isinstance(raw["sources"], list):
         raise FeedError("manifest must contain only a sources array")
-    required = {"product", "repository", "packages", "ipk_pattern", "installer", "installer_source"}
+    required = {
+        "product", "repository", "packages", "ipk_pattern", "installer",
+        "installer_source", "release_installer_asset",
+    }
     result = []
     products = set()
     installers = set()
     for item in raw["sources"]:
         if (not isinstance(item, dict) or set(item) != required
-                or not all(isinstance(item[k], str) for k in required - {"packages"})
+                or not all(isinstance(item[k], str) for k in required - {"packages", "release_installer_asset"})
                 or not isinstance(item["packages"], list)
                 or not item["packages"]
-                or not all(isinstance(package, str) for package in item["packages"])):
+                or not all(isinstance(package, str) for package in item["packages"])
+                or (item["release_installer_asset"] is not None
+                    and not isinstance(item["release_installer_asset"], str))):
             raise FeedError("manifest source has unexpected or invalid fields")
         spec = SourceSpec(
             product=item["product"], repository=item["repository"],
             packages=tuple(item["packages"]), ipk_pattern=item["ipk_pattern"],
             installer=item["installer"], installer_source=item["installer_source"],
+            release_installer_asset=item["release_installer_asset"],
         )
         if not PRODUCT_NAME.fullmatch(spec.product) or not REPOSITORY.fullmatch(spec.repository):
             raise FeedError("invalid product or repository")
@@ -126,6 +138,9 @@ def _validate_manifest(raw: dict) -> list[SourceSpec]:
             raise FeedError("invalid or duplicate package allowlist")
         if not SAFE_INSTALLER.fullmatch(spec.installer) or not SOURCE_PATH.fullmatch(spec.installer_source):
             raise FeedError("invalid installer path")
+        if (spec.release_installer_asset is not None
+                and not SAFE_INSTALLER.fullmatch(spec.release_installer_asset)):
+            raise FeedError("invalid release installer asset")
         try:
             compiled = spec.ipk_regex
         except re.error as exc:
@@ -141,6 +156,8 @@ def _validate_manifest(raw: dict) -> list[SourceSpec]:
     if ({spec.product: spec.repository for spec in result} != EXPECTED_REPOSITORIES
             or {spec.product: frozenset(spec.packages) for spec in result} != EXPECTED_PACKAGES
             or {spec.product: (spec.installer, spec.installer_source) for spec in result} != EXPECTED_INSTALLERS
+            or {spec.product: spec.release_installer_asset for spec in result}
+            != EXPECTED_RELEASE_INSTALLER_ASSETS
             or {spec.product: spec.ipk_pattern for spec in result} != EXPECTED_IPK_PATTERNS):
         raise FeedError("manifest must define the three exact product repositories, packages, installers, and regexes")
     return result

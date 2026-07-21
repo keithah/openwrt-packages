@@ -6,7 +6,8 @@
       "packages": ["gl-app-starwatch", "luci-app-starwatch", "starwatchd"],
       "ipk_pattern": "^(?P<package>starwatchd|luci-app-starwatch|gl-app-starwatch)_(?P<version>[A-Za-z0-9.+~:-]+)_(?P<architecture>aarch64_cortex-a53|all)\\.ipk$",
       "installer": "install-starwatch.sh",
-      "installer_source": "package/install.sh"
+      "installer_source": "package/install.sh",
+      "release_installer_asset": null
     },
     {
       "product": "wattline",
@@ -14,7 +15,8 @@
       "packages": ["gl-app-wattline", "luci-app-wattline", "wattline-bt", "wattline-rtl8761b", "wattlined"],
       "ipk_pattern": "^(?P<package>wattlined|wattline-bt|wattline-rtl8761b|luci-app-wattline|gl-app-wattline)_(?P<version>[A-Za-z0-9.+~:-]+)_(?P<architecture>aarch64_cortex-a53|all)\\.ipk$",
       "installer": "install-wattline.sh",
-      "installer_source": "package/install.sh"
+      "installer_source": "package/install.sh",
+      "release_installer_asset": null
     },
     {
       "product": "speedtest",
@@ -22,7 +24,8 @@
       "packages": ["ookla-speedtest-cli"],
       "ipk_pattern": "^(?P<package>ookla-speedtest-cli)_(?P<version>[A-Za-z0-9.+~:-]+)_(?P<architecture>aarch64_cortex-a53)\\.ipk$",
       "installer": "install-ookla-speedtest-cli.sh",
-      "installer_source": "scripts/install.sh"
+      "installer_source": "scripts/install.sh",
+      "release_installer_asset": "install-ookla-speedtest-cli.sh"
     }
   ]
 }

@@ -161,6 +161,15 @@ class AssembleFeedTest(unittest.TestCase):
     def test_manifest_is_strict_and_names_exact_repositories(self):
         repos = {item["repository"] for item in self.manifest["sources"]}
         self.assertEqual(repos, {"keithah/openwrt-starwatch", "keithah/openwrt-wattline", "keithah/openwrt-ookla-speedtest-cli"})
+        release_installers = {
+            item["product"]: item["release_installer_asset"]
+            for item in self.manifest["sources"]
+        }
+        self.assertEqual(release_installers, {
+            "starwatch": None,
+            "wattline": None,
+            "speedtest": "install-ookla-speedtest-cli.sh",
+        })
         bad = self.base / "bad.json"
         bad.write_text(json.dumps({"sources": [], "extra": True}))
         with self.assertRaises(FeedError):
@@ -188,6 +197,10 @@ class AssembleFeedTest(unittest.TestCase):
             assemble(self.downloads, self.output, list(self.manifest["sources"]))
         changed = json.loads(json.dumps(self.manifest))
         changed["sources"][0]["installer"] = "install-other.sh"
+        with self.assertRaisesRegex(FeedError, "exact product"):
+            assemble(self.downloads, self.output, changed)
+        changed = json.loads(json.dumps(self.manifest))
+        changed["sources"][2]["release_installer_asset"] = None
         with self.assertRaisesRegex(FeedError, "exact product"):
             assemble(self.downloads, self.output, changed)
         changed = json.loads(json.dumps(self.manifest))

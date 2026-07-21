@@ -106,7 +106,6 @@ class FetchReleasesTest(unittest.TestCase):
                 "tag_name": tag, "draft": False, "prerelease": False,
                 "immutable": False, "assets": assets,
             }
-            self.routes[releases_url] = _json_response(release, releases_url)
             encoded_tag = tag.replace("+", "%2B").replace("/", "%2F")
             ref_url = f"https://api.github.com/repos/{repository}/git/ref/tags/{encoded_tag}"
             ref_value = {
@@ -123,6 +122,20 @@ class FetchReleasesTest(unittest.TestCase):
             )
             installer = f"#!/bin/sh\n# {product} {tag}\n".encode()
             self.payloads[(product, source["installer"])] = installer
+            if product == "speedtest":
+                installer_asset_url = (
+                    f"https://api.github.com/repos/{repository}/releases/assets/{asset_id}"
+                )
+                assets.append({
+                    "id": asset_id, "name": source["installer"], "url": installer_asset_url,
+                })
+                self.routes[installer_asset_url] = FakeResponse(
+                    installer,
+                    f"https://objects.githubusercontent.com/release/{asset_id}/{source['installer']}",
+                    content_type="application/octet-stream",
+                )
+                asset_id += 1
+            self.routes[releases_url] = _json_response(release, releases_url)
             contents = {
                 "type": "file", "name": Path(source["installer_source"]).name,
                 "path": source["installer_source"], "encoding": "base64",
@@ -209,6 +222,44 @@ class FetchReleasesTest(unittest.TestCase):
                 self.routes[url] = _json_response(dict(release, **changes), url)
                 with self.assertRaisesRegex(FetchError, "stable|immutable"):
                     fetch_all(self.manifest, self.destination, opener=self.opener)
+
+    def test_speedtest_requires_one_matching_release_installer_asset(self):
+        source = self.manifest["sources"][2]
+        repository = source["repository"]
+        url = f"https://api.github.com/repos/{repository}/releases/latest"
+        release = json.loads(self.routes[url].body)
+        installer = next(asset for asset in release["assets"] if asset["name"] == source["installer"])
+        missing = [asset for asset in release["assets"] if asset is not installer]
+        duplicate = dict(
+            installer, id=999,
+            url=f"https://api.github.com/repos/{repository}/releases/assets/999",
+        )
+        for assets in (missing, [*release["assets"], duplicate]):
+            with self.subTest(assets=assets):
+                self.setUp()
+                self.routes[url] = _json_response(dict(release, assets=assets), url)
+                with self.assertRaisesRegex(FetchError, "installer|duplicate|inventory"):
+                    fetch_all(self.manifest, self.destination, opener=self.opener)
+
+    def test_release_installer_must_equal_commit_pinned_canonical_source(self):
+        self.destination.mkdir()
+        (self.destination / "old").write_text("preserve")
+        source = self.manifest["sources"][2]
+        repository = source["repository"]
+        url = f"https://api.github.com/repos/{repository}/releases/latest"
+        release = json.loads(self.routes[url].body)
+        installer_asset = next(
+            asset for asset in release["assets"] if asset["name"] == source["installer"]
+        )
+        self.routes[installer_asset["url"]] = FakeResponse(
+            b"#!/bin/sh\n# stale release copy\n",
+            f"https://objects.githubusercontent.com/release/{installer_asset['id']}/{source['installer']}",
+            content_type="application/octet-stream",
+        )
+        with self.assertRaisesRegex(FetchError, "installer.*match|canonical"):
+            fetch_all(self.manifest, self.destination, opener=self.opener)
+        self.assertEqual((self.destination / "old").read_text(), "preserve")
+        self.assertEqual(list(self.base.glob(".downloads.new-*")), [])
 
     def test_latest_endpoint_is_independent_of_more_than_100_release_history(self):
         source = self.manifest["sources"][0]

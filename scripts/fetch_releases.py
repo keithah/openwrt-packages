@@ -212,7 +212,9 @@ def _asset_api_url(spec: SourceSpec, asset: dict) -> tuple[str, str]:
     return name, url
 
 
-def _latest_release(opener, spec: SourceSpec, token: str | None) -> tuple[str, list[tuple[str, str]]]:
+def _latest_release(
+    opener, spec: SourceSpec, token: str | None,
+) -> tuple[str, list[tuple[str, str]], tuple[str, str] | None]:
     url = f"{API_ROOT}/repos/{spec.repository}/releases/latest"
     release = _get_json(opener, url, token)
     if not isinstance(release, dict):
@@ -235,11 +237,15 @@ def _latest_release(opener, spec: SourceSpec, token: str | None) -> tuple[str, l
     seen_names = set()
     selected_assets = []
     selected_packages = set()
+    release_installer = None
     for raw_asset in raw_assets:
         name, asset_url = _asset_api_url(spec, raw_asset)
         if name in seen_names:
             raise FetchError(f"duplicate release asset name: {name}")
         seen_names.add(name)
+        if name == spec.release_installer_asset:
+            release_installer = (name, asset_url)
+            continue
         match = spec.ipk_regex.fullmatch(name)
         if match is None:
             raise FetchError(f"unexpected release asset: {name}")
@@ -250,7 +256,9 @@ def _latest_release(opener, spec: SourceSpec, token: str | None) -> tuple[str, l
         selected_assets.append((name, asset_url))
     if selected_packages != set(spec.packages):
         raise FetchError(f"missing release package assets for {spec.product}")
-    return tag, sorted(selected_assets)
+    if spec.release_installer_asset is not None and release_installer is None:
+        raise FetchError(f"missing release installer asset for {spec.product}")
+    return tag, sorted(selected_assets), release_installer
 
 
 def _git_target(spec: SourceSpec, value: object) -> tuple[str, str, str]:
@@ -290,7 +298,9 @@ def _resolve_tag(opener, spec: SourceSpec, tag: str, token: str | None) -> str:
     raise FetchError(f"Git tag nesting limit exceeded for {spec.product}")
 
 
-def _download_asset(opener, url: str, output: Path, token: str | None) -> None:
+def _download_asset(
+    opener, url: str, output: Path, token: str | None, *, limit: int = MAX_ASSET_SIZE,
+) -> None:
     request = _request(url, token, binary=True)
     temporary = output.with_name(f".{output.name}.part")
     digest = hashlib.sha256()
@@ -298,7 +308,7 @@ def _download_asset(opener, url: str, output: Path, token: str | None) -> None:
     try:
         with _open(opener, request) as response:
             content_length = _response_metadata(
-                response, url, limit=MAX_ASSET_SIZE, expected_types=ALLOWED_DOWNLOAD_TYPES
+                response, url, limit=limit, expected_types=ALLOWED_DOWNLOAD_TYPES
             )
             with temporary.open("xb") as stream:
                 while True:
@@ -308,7 +318,7 @@ def _download_asset(opener, url: str, output: Path, token: str | None) -> None:
                     if not chunk:
                         break
                     count += len(chunk)
-                    if count > MAX_ASSET_SIZE:
+                    if count > limit:
                         raise FetchError("release asset is too large")
                     stream.write(chunk)
                     digest.update(chunk)
@@ -417,11 +427,24 @@ def fetch_all(manifest: dict, destination: Path, *, opener=None,
         for spec in specs:
             product_dir = staging / spec.product
             product_dir.mkdir(mode=0o755)
-            tag, assets = _latest_release(opener, spec, token)
+            tag, assets, release_installer = _latest_release(opener, spec, token)
             commit = _resolve_tag(opener, spec, tag, token)
             for name, url in assets:
                 _download_asset(opener, url, product_dir / name, token)
+            release_installer_path = None
+            if release_installer is not None:
+                _, release_installer_url = release_installer
+                release_installer_path = product_dir / ".release-installer-asset"
+                _download_asset(
+                    opener, release_installer_url, release_installer_path, token,
+                    limit=MAX_INSTALLER_SIZE,
+                )
             installer = _installer(opener, spec, commit, token)
+            if (release_installer_path is not None
+                    and release_installer_path.read_bytes() != installer):
+                raise FetchError(f"release installer does not match canonical source for {spec.product}")
+            if release_installer_path is not None:
+                release_installer_path.unlink()
             installer_path = product_dir / spec.installer
             installer_path.write_bytes(installer)
             os.chmod(installer_path, 0o755)
