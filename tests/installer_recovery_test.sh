@@ -149,6 +149,26 @@ EOF
 	[ "$(stat -c %a "$_case_dir/root/etc/opkg/keys/f6c72c675c844b91")" = 600 ] || fail 'key metadata changed on rollback'
 }
 
+run_backup_atomicity_case() {
+	_case_dir=$TMP/backup_atomicity
+	mkdir -p "$_case_dir/root/etc/opkg/keys" "$_case_dir/bin"
+	printf 'old feed\n' >"$_case_dir/root/etc/opkg/customfeeds.conf"
+	printf 'old key\n' >"$_case_dir/root/etc/opkg/keys/f6c72c675c844b91"
+	cp -p "$_case_dir/root/etc/opkg/customfeeds.conf" "$_case_dir/feed.before"
+	cp -p "$_case_dir/root/etc/opkg/keys/f6c72c675c844b91" "$_case_dir/key.before"
+	cat >"$_case_dir/bin/mv" <<'EOF'
+#!/bin/sh
+case "$2:$3" in *f6c72c675c844b91:*backup.*) exit 74 ;; esac
+exec /bin/mv "$@"
+EOF
+	chmod +x "$_case_dir/bin/mv"
+	if PATH="$_case_dir/bin:$TMP/bin:$PATH" KEITHAH_ROOT="$_case_dir/root" MOCK_LOG="$_case_dir/log" MOCK_PUBLIC_KEY="$ROOT/keithah-feed.pub" MOCK_ARCH=aarch64_cortex-a53 sh "$ROOT/scripts/installer_recovery.sh" >/dev/null 2>&1; then
+		fail 'backup atomicity case unexpectedly succeeded'
+	fi
+	cmp "$_case_dir/feed.before" "$_case_dir/root/etc/opkg/customfeeds.conf" || fail 'second backup failure changed feed'
+	cmp "$_case_dir/key.before" "$_case_dir/root/etc/opkg/keys/f6c72c675c844b91" || fail 'second backup failure changed key'
+}
+
 run_case no_peers '' '' aarch64_cortex-a53
 [ "$_status" -eq 0 ] || fail "no-peers case failed"
 assert_log 'print-architecture
@@ -196,6 +216,7 @@ cmp "$TMP/bad_arch/customfeeds.before" \
 
 run_migration_case
 run_atomicity_case
+run_backup_atomicity_case
 printf '%s\n%s' \
 	'src/gz keithah https://keithah.github.io/openwrt-packages' \
 	'src/gz unrelated https://example.invalid/packages' \

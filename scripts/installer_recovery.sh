@@ -16,6 +16,10 @@ _keithah_key_backup=
 _keithah_feed_had=0
 _keithah_key_had=0
 _keithah_rollback=0
+_keithah_feed_staged=0
+_keithah_key_staged=0
+_keithah_feed_replaced=0
+_keithah_key_replaced=0
 
 _keithah_error() {
 	printf '%s\n' "keithah installer recovery: $*" >&2
@@ -28,9 +32,10 @@ _keithah_cleanup() {
 	[ -z "${_keithah_tmp_key:-}" ] || rm -f "$_keithah_tmp_key"
 	[ -z "${_keithah_tmp_expected_key:-}" ] || rm -f "$_keithah_tmp_expected_key"
 	if [ "${_keithah_rollback:-0}" -eq 1 ]; then
-		rm -f "$_keithah_feed_file" "$_keithah_key_file" || :
-		[ "$_keithah_feed_had" -eq 0 ] || mv -f "$_keithah_feed_backup" "$_keithah_feed_file" || :
-		[ "$_keithah_key_had" -eq 0 ] || mv -f "$_keithah_key_backup" "$_keithah_key_file" || :
+		[ "$_keithah_feed_staged" -eq 0 ] && [ "$_keithah_feed_replaced" -eq 0 ] || rm -f "$_keithah_feed_file" || :
+		[ "$_keithah_key_staged" -eq 0 ] && [ "$_keithah_key_replaced" -eq 0 ] || rm -f "$_keithah_key_file" || :
+		[ ! -e "$_keithah_feed_backup" ] || mv -f "$_keithah_feed_backup" "$_keithah_feed_file" || :
+		[ ! -e "$_keithah_key_backup" ] || mv -f "$_keithah_key_backup" "$_keithah_key_file" || :
 	fi
 	[ -z "${_keithah_feed_backup:-}" ] || rm -f "$_keithah_feed_backup" || :
 	[ -z "${_keithah_key_backup:-}" ] || rm -f "$_keithah_key_backup" || :
@@ -159,15 +164,17 @@ cat "$_keithah_tmp_filtered" >"$_keithah_tmp_feed" ||
 
 _keithah_feed_backup=$_keithah_opkg_dir/.customfeeds.conf.backup.$$
 _keithah_key_backup=$_keithah_key_dir/.f6c72c675c844b91.backup.$$
-if [ -e "$_keithah_feed_file" ]; then _keithah_feed_had=1; mv -f "$_keithah_feed_file" "$_keithah_feed_backup" || _keithah_error 'feed configuration failed: cannot stage feed backup'; fi
-if [ -e "$_keithah_key_file" ]; then _keithah_key_had=1; mv -f "$_keithah_key_file" "$_keithah_key_backup" || _keithah_error 'feed configuration failed: cannot stage key backup'; fi
 _keithah_rollback=1
+if [ -e "$_keithah_feed_file" ]; then _keithah_feed_had=1; mv -f "$_keithah_feed_file" "$_keithah_feed_backup" || _keithah_error 'feed configuration failed: cannot stage feed backup'; _keithah_feed_staged=1; fi
+if [ -e "$_keithah_key_file" ]; then _keithah_key_had=1; mv -f "$_keithah_key_file" "$_keithah_key_backup" || _keithah_error 'feed configuration failed: cannot stage key backup'; _keithah_key_staged=1; fi
 mv -f "$_keithah_tmp_key" "$_keithah_key_file" ||
 	_keithah_error 'feed configuration failed: cannot install public key'
 _keithah_tmp_key=
+_keithah_key_replaced=1
 mv -f "$_keithah_tmp_feed" "$_keithah_feed_file" ||
 	_keithah_error 'feed configuration failed: cannot install customfeeds.conf'
 _keithah_tmp_feed=
+_keithah_feed_replaced=1
 _keithah_rollback=0
 rm -f "$_keithah_feed_backup" "$_keithah_key_backup"
 _keithah_feed_backup=
