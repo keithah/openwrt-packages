@@ -38,7 +38,11 @@ curl -fsSL https://keithah.github.io/openwrt-packages/install-wattline.sh | sh
 ```
 
 The installers configure the `keithah` opkg feed without disabling signature
-checks. Its usign public-key fingerprint is `f6c72c675c844b91`.
+checks. Its usign public-key fingerprint is `f6c72c675c844b91`. Every published
+installer first repairs any already-present `starwatchd` and `wattlined`
+packages, then runs the selected product's installer. This recovery never
+installs an absent peer product. Ordinary `opkg update && opkg upgrade` remains
+supported after the fixed package versions enter the feed.
 
 ## Packages
 

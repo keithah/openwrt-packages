@@ -9,7 +9,7 @@ import tarfile
 import tempfile
 import unittest
 
-from scripts.assemble_feed import FeedError, assemble, load_manifest
+from scripts.assemble_feed import FeedError, MAX_INSTALLER_SIZE, assemble, load_manifest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -107,7 +107,13 @@ class AssembleFeedTest(unittest.TestCase):
             elif product == "ookla-speedtest-web":
                 product = "speedtest-web"
             copied = self.output / installer
-            self.assertEqual(copied.read_bytes(), (self.downloads / product / installer).read_bytes())
+            recovery = (ROOT / "scripts/installer_recovery.sh").read_bytes().rstrip(b"\n") + b"\n\n"
+            upstream = (self.downloads / product / installer).read_bytes()
+            wrapped = copied.read_bytes()
+            self.assertTrue(wrapped.startswith(b"# keithah-installer-recovery-v1\n"))
+            self.assertTrue(wrapped.startswith(recovery))
+            self.assertEqual(wrapped[len(recovery):], upstream)
+            self.assertEqual(wrapped.count(upstream), 1)
             self.assertEqual(copied.stat().st_mode & 0o777, 0o755)
         for ipk in self.downloads.glob("*/*.ipk"):
             self.assertIn(f"Filename: {ipk.name}\n", packages.decode())
@@ -118,6 +124,26 @@ class AssembleFeedTest(unittest.TestCase):
     def assert_rejected(self, message):
         with self.assertRaisesRegex(FeedError, message):
             assemble(self.downloads, self.output, self.manifest)
+
+    def test_rejects_missing_or_nonregular_recovery_script(self):
+        recovery = self.base / "recovery.sh"
+        with self.assertRaisesRegex(FeedError, "recovery"):
+            assemble(self.downloads, self.output, self.manifest, recovery_script=recovery)
+        recovery.symlink_to(ROOT / "keithah-feed.pub")
+        with self.assertRaisesRegex(FeedError, "recovery"):
+            assemble(self.downloads, self.output, self.manifest, recovery_script=recovery)
+
+    def test_rejects_oversize_recovery_and_wrapped_installer(self):
+        recovery = self.base / "recovery.sh"
+        recovery.write_bytes(b"x" * (MAX_INSTALLER_SIZE + 1))
+        with self.assertRaisesRegex(FeedError, "recovery.*size"):
+            assemble(self.downloads, self.output, self.manifest, recovery_script=recovery)
+
+        recovery.write_bytes(b"# keithah-installer-recovery-v1\n")
+        installer = self.downloads / "starwatch" / "install-starwatch.sh"
+        installer.write_bytes(b"x" * MAX_INSTALLER_SIZE)
+        with self.assertRaisesRegex(FeedError, "wrapped installer.*starwatch"):
+            assemble(self.downloads, self.output, self.manifest, recovery_script=recovery)
 
     def test_rejects_missing_product_or_installer_and_multiple_installers(self):
         shutil.rmtree(self.downloads / "starwatch")

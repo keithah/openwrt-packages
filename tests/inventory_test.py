@@ -27,6 +27,7 @@ from tests.test_assemble_feed import make_ipk  # noqa: E402
 EXPECTED_FINGERPRINT = "f6c72c675c844b91"
 GENERATED = {"Packages", "Packages.gz", "Packages.sig", "keithah-feed.pub", ".nojekyll"}
 REQUIRED_FIELDS = {"package", "version", "architecture", "filename", "size", "sha256sum"}
+INSTALLER_RECOVERY_MARKER = b"# keithah-installer-recovery-v1\n"
 
 
 class InventoryError(ValueError):
@@ -172,6 +173,8 @@ def validate(pages: Path, manifest_path: Path = ROOT / "sources.json",
             raise InventoryError(f"installer mode is not 0755: {name}")
         if not 0 < installer_stat.st_size <= MAX_INSTALLER_SIZE:
             raise InventoryError(f"installer size is invalid: {name}")
+        if not installer.read_bytes().startswith(INSTALLER_RECOVERY_MARKER):
+            raise InventoryError(f"installer recovery marker is missing: {name}")
     expected_public = public_key_path.read_bytes()
     published_public = (pages / "keithah-feed.pub").read_bytes()
     if published_public != expected_public:
@@ -202,7 +205,7 @@ class InventoryValidatorTest(unittest.TestCase):
         installers = ("install-starwatch.sh", "install-wattline.sh", "install-ookla-speedtest-cli.sh", "install-ookla-speedtest-web.sh")
         for name in installers:
             path = self.pages / name
-            path.write_text("#!/bin/sh\n", encoding="utf-8")
+            path.write_bytes(INSTALLER_RECOVERY_MARKER + b"#!/bin/sh\n")
             path.chmod(0o755)
         package_records = []
         fixtures = (
@@ -322,7 +325,7 @@ class InventoryValidatorTest(unittest.TestCase):
         installer.write_bytes(b"x" * (1024 * 1024 + 1))
         with self.assertRaisesRegex(InventoryError, "installer"):
             validate(self.pages)
-        installer.write_text("#!/bin/sh\n")
+        installer.write_bytes(INSTALLER_RECOVERY_MARKER + b"#!/bin/sh\n")
         installer.chmod(0o4755)
         with self.assertRaisesRegex(InventoryError, "0755"):
             validate(self.pages)
@@ -330,6 +333,11 @@ class InventoryValidatorTest(unittest.TestCase):
         fifo = self.pages / "device"
         os.mkfifo(fifo)
         with self.assertRaisesRegex(InventoryError, "unsafe artifact"):
+            validate(self.pages)
+
+    def test_rejects_installer_without_recovery_marker(self):
+        (self.pages / "install-starwatch.sh").write_text("#!/bin/sh\n")
+        with self.assertRaisesRegex(InventoryError, "recovery marker"):
             validate(self.pages)
 
 

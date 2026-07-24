@@ -385,10 +385,24 @@ def _replace_output(staging: Path, output: Path) -> None:
         shutil.rmtree(backup)
 
 
-def assemble(download_root: Path, output: Path, manifest: dict) -> list[PackageRecord]:
+def assemble(
+    download_root: Path,
+    output: Path,
+    manifest: dict,
+    recovery_script: Path = Path("scripts/installer_recovery.sh"),
+) -> list[PackageRecord]:
     download_root = Path(download_root)
     output = Path(output)
+    recovery_script = Path(recovery_script)
     specs = _validate_manifest(manifest)
+    try:
+        recovery_stat = recovery_script.lstat()
+        if (not recovery_script.is_file() or recovery_script.is_symlink()
+                or recovery_stat.st_size > MAX_INSTALLER_SIZE):
+            raise FeedError("invalid installer recovery script or size")
+        recovery_bytes = recovery_script.read_bytes()
+    except OSError as exc:
+        raise FeedError(f"invalid installer recovery script: {exc}") from exc
     try:
         output_resolved = output.resolve()
         download_resolved = download_root.resolve()
@@ -471,7 +485,10 @@ def assemble(download_root: Path, output: Path, manifest: dict) -> list[PackageR
                 raise FeedError(f"indexed file missing from output: {ipk.name}")
             os.chmod(staging / ipk.name, 0o644)
         for spec, installer in product_installers:
-            _copy_file(installer, staging / spec.installer)
+            payload = recovery_bytes.rstrip(b"\n") + b"\n\n" + installer.read_bytes()
+            if len(payload) > MAX_INSTALLER_SIZE:
+                raise FeedError(f"wrapped installer exceeds size limit for {spec.product}")
+            (staging / spec.installer).write_bytes(payload)
             if not (staging / spec.installer).is_file():
                 raise FeedError(f"installer missing from output: {spec.installer}")
             os.chmod(staging / spec.installer, 0o755)
@@ -501,8 +518,10 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, default=Path("sources.json"))
     parser.add_argument("--downloads", type=Path, default=Path("downloads"))
     parser.add_argument("--output", type=Path, default=Path("pages"))
+    parser.add_argument("--installer-recovery", type=Path,
+                        default=Path("scripts/installer_recovery.sh"))
     args = parser.parse_args()
-    assemble(args.downloads, args.output, load_manifest(args.manifest))
+    assemble(args.downloads, args.output, load_manifest(args.manifest), args.installer_recovery)
     return 0
 
 
