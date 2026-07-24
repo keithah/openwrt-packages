@@ -59,6 +59,8 @@ command -v cmp >/dev/null 2>&1 ||
 	_keithah_error 'preflight failed: cmp is required'
 command -v mktemp >/dev/null 2>&1 ||
 	_keithah_error 'preflight failed: mktemp is required'
+command -v tail >/dev/null 2>&1 ||
+	_keithah_error 'preflight failed: tail is required'
 
 _keithah_base=$_keithah_root
 [ "$_keithah_base" != / ] || _keithah_base=
@@ -88,6 +90,13 @@ _keithah_tmp_key=$(mktemp "$_keithah_key_dir/.keithah-key.XXXXXX") ||
 _keithah_tmp_expected_key=$(mktemp "$_keithah_key_dir/.keithah-expected-key.XXXXXX") ||
 	_keithah_error 'feed configuration failed: cannot create expected-key temporary file'
 
+if [ -f "$_keithah_key_file" ]; then
+	cp -p "$_keithah_key_file" "$_keithah_tmp_key" ||
+		_keithah_error 'feed configuration failed: cannot preserve feed-key metadata'
+else
+	chmod 0644 "$_keithah_tmp_key" ||
+		_keithah_error 'feed configuration failed: cannot set public-key permissions'
+fi
 if ! wget -qO "$_keithah_tmp_key" "$_keithah_feed_url/keithah-feed.pub"; then
 	_keithah_error 'feed configuration failed: public-key download failed'
 fi
@@ -97,8 +106,6 @@ RWT2xyxnXIRLkZzbs1HvD+48GPkSqoNPCZVCOw49GUdTg2O7Cv9LzMtx
 EOF
 cmp -s "$_keithah_tmp_expected_key" "$_keithah_tmp_key" ||
 	_keithah_error 'feed configuration failed: public key does not match pinned key'
-chmod 0644 "$_keithah_tmp_key" ||
-	_keithah_error 'feed configuration failed: cannot set public-key permissions'
 
 if [ -f "$_keithah_feed_file" ]; then
 	cp -p "$_keithah_feed_file" "$_keithah_tmp_feed" ||
@@ -107,16 +114,36 @@ else
 	chmod 0644 "$_keithah_tmp_feed" ||
 		_keithah_error 'feed configuration failed: cannot set customfeeds.conf permissions'
 fi
-awk '
-	($1 == "src" || $1 == "src/gz") &&
-	($2 == "starwatch" || $2 == "wattline" || $2 == "keithah") { next }
-	{ print }
+_keithah_final_newline=1
+if [ -s "$_keithah_feed_file" ] &&
+	[ -n "$(tail -c 1 "$_keithah_feed_file")" ]; then
+	_keithah_final_newline=0
+fi
+awk -v _keithah_managed="src/gz $_keithah_feed_name $_keithah_feed_url" \
+	-v _keithah_final_newline="$_keithah_final_newline" '
+	BEGIN { print _keithah_managed }
+	{
+		if (_keithah_pending_set) {
+			print _keithah_pending
+			_keithah_pending_set = 0
+		}
+		if (($1 == "src" || $1 == "src/gz") &&
+				($2 == "starwatch" || $2 == "wattline" || $2 == "keithah"))
+			next
+		_keithah_pending = $0
+		_keithah_pending_set = 1
+	}
+	END {
+		if (_keithah_pending_set) {
+			printf "%s", _keithah_pending
+			if (_keithah_final_newline)
+				printf "\n"
+		}
+	}
 ' "$_keithah_feed_file" >"$_keithah_tmp_filtered" 2>/dev/null ||
 	_keithah_error 'feed configuration failed: cannot filter customfeeds.conf'
 cat "$_keithah_tmp_filtered" >"$_keithah_tmp_feed" ||
 	_keithah_error 'feed configuration failed: cannot write customfeeds.conf'
-printf '%s\n' "src/gz $_keithah_feed_name $_keithah_feed_url" >>"$_keithah_tmp_feed" ||
-	_keithah_error 'feed configuration failed: cannot append shared feed'
 
 mv -f "$_keithah_tmp_key" "$_keithah_key_file" ||
 	_keithah_error 'feed configuration failed: cannot install public key'
@@ -143,4 +170,4 @@ unset _keithah_feed_name _keithah_key_fingerprint _keithah_architectures
 unset _keithah_arch_ok _keithah_arch_word _keithah_arch_name _keithah_arch_priority
 unset _keithah_base _keithah_opkg_dir _keithah_key_dir _keithah_feed_file
 unset _keithah_key_file _keithah_tmp_feed _keithah_tmp_filtered _keithah_tmp_key
-unset _keithah_tmp_expected_key _keithah_daemon
+unset _keithah_tmp_expected_key _keithah_final_newline _keithah_daemon

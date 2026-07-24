@@ -83,6 +83,45 @@ assert_log() {
 		fail "unexpected command sequence: $(tr '\n' '|' <"$_actual")"
 }
 
+run_migration_case() {
+	_case_dir=$TMP/migration
+	mkdir -p "$_case_dir/root/etc/opkg/keys"
+	printf '%s\n%s\n%s' \
+		'src/gz starwatch https://old.invalid/starwatch' \
+		'src/gz keithah https://duplicate.invalid/packages' \
+		'src/gz unrelated https://example.invalid/packages' \
+		>"$_case_dir/root/etc/opkg/customfeeds.conf"
+	chmod 0640 "$_case_dir/root/etc/opkg/customfeeds.conf"
+	stat -c '%a:%u:%g' "$_case_dir/root/etc/opkg/customfeeds.conf" \
+		>"$_case_dir/feed.metadata.expected"
+	printf '%s\n' 'obsolete key' \
+		>"$_case_dir/root/etc/opkg/keys/f6c72c675c844b91"
+	chmod 0600 "$_case_dir/root/etc/opkg/keys/f6c72c675c844b91"
+	stat -c '%a:%u:%g' "$_case_dir/root/etc/opkg/keys/f6c72c675c844b91" \
+		>"$_case_dir/key.metadata.expected"
+	: >"$_case_dir/log"
+	cat >"$_case_dir/upstream.sh" <<'EOF'
+[ -z "$(trap)" ] || exit 91
+printf "%s\n" upstream >>"$MOCK_LOG"
+EOF
+	cat "$ROOT/scripts/installer_recovery.sh" "$_case_dir/upstream.sh" >"$_case_dir/combined.sh"
+	for _run in first second; do
+		PATH="$TMP/bin:$PATH" \
+		KEITHAH_ROOT="$_case_dir/root" \
+		MOCK_LOG="$_case_dir/log" \
+		MOCK_PUBLIC_KEY="$ROOT/keithah-feed.pub" \
+		MOCK_INSTALLED='' \
+		MOCK_INSTALL_FAIL='' \
+		MOCK_ARCH=aarch64_cortex-a53 \
+		sh "$_case_dir/combined.sh" >"$_case_dir/stdout.$_run" \
+		2>"$_case_dir/stderr.$_run" || fail "migration $_run run failed"
+		if [ "$_run" = first ]; then
+			cp "$_case_dir/root/etc/opkg/customfeeds.conf" "$_case_dir/feed.first"
+			cp "$_case_dir/root/etc/opkg/keys/f6c72c675c844b91" "$_case_dir/key.first"
+		fi
+	done
+}
+
 run_case no_peers '' '' aarch64_cortex-a53
 [ "$_status" -eq 0 ] || fail "no-peers case failed"
 assert_log 'print-architecture
@@ -127,5 +166,33 @@ cmp "$TMP/bad_arch/customfeeds.before" \
 	fail "bad architecture mutated the feed configuration"
 [ ! -e "$TMP/bad_arch/root/etc/opkg/keys/f6c72c675c844b91" ] ||
 	fail "bad architecture installed the feed key"
+
+run_migration_case
+printf '%s\n%s' \
+	'src/gz keithah https://keithah.github.io/openwrt-packages' \
+	'src/gz unrelated https://example.invalid/packages' \
+	>"$TMP/migration/feed.expected"
+cmp "$TMP/migration/feed.expected" \
+	"$TMP/migration/root/etc/opkg/customfeeds.conf" >/dev/null ||
+	fail "migration did not preserve exact unrelated feed bytes"
+stat -c '%a:%u:%g' "$TMP/migration/root/etc/opkg/customfeeds.conf" \
+	>"$TMP/migration/feed.metadata.actual"
+cmp "$TMP/migration/feed.metadata.expected" \
+	"$TMP/migration/feed.metadata.actual" >/dev/null ||
+	fail "migration did not preserve feed metadata"
+cmp "$ROOT/keithah-feed.pub" \
+	"$TMP/migration/root/etc/opkg/keys/f6c72c675c844b91" >/dev/null ||
+	fail "migration did not install the exact pinned key"
+stat -c '%a:%u:%g' "$TMP/migration/root/etc/opkg/keys/f6c72c675c844b91" \
+	>"$TMP/migration/key.metadata.actual"
+cmp "$TMP/migration/key.metadata.expected" \
+	"$TMP/migration/key.metadata.actual" >/dev/null ||
+	fail "migration did not preserve key metadata"
+cmp "$TMP/migration/feed.first" \
+	"$TMP/migration/root/etc/opkg/customfeeds.conf" >/dev/null ||
+	fail "second migration changed feed bytes"
+cmp "$TMP/migration/key.first" \
+	"$TMP/migration/root/etc/opkg/keys/f6c72c675c844b91" >/dev/null ||
+	fail "second migration changed key bytes"
 
 printf '%s\n' 'installer recovery tests passed'
