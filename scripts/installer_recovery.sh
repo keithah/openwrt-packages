@@ -11,6 +11,11 @@ _keithah_tmp_feed=
 _keithah_tmp_filtered=
 _keithah_tmp_key=
 _keithah_tmp_expected_key=
+_keithah_feed_backup=
+_keithah_key_backup=
+_keithah_feed_had=0
+_keithah_key_had=0
+_keithah_rollback=0
 
 _keithah_error() {
 	printf '%s\n' "keithah installer recovery: $*" >&2
@@ -22,6 +27,13 @@ _keithah_cleanup() {
 	[ -z "${_keithah_tmp_filtered:-}" ] || rm -f "$_keithah_tmp_filtered"
 	[ -z "${_keithah_tmp_key:-}" ] || rm -f "$_keithah_tmp_key"
 	[ -z "${_keithah_tmp_expected_key:-}" ] || rm -f "$_keithah_tmp_expected_key"
+	if [ "${_keithah_rollback:-0}" -eq 1 ]; then
+		rm -f "$_keithah_feed_file" "$_keithah_key_file" || :
+		[ "$_keithah_feed_had" -eq 0 ] || mv -f "$_keithah_feed_backup" "$_keithah_feed_file" || :
+		[ "$_keithah_key_had" -eq 0 ] || mv -f "$_keithah_key_backup" "$_keithah_key_file" || :
+	fi
+	[ -z "${_keithah_feed_backup:-}" ] || rm -f "$_keithah_feed_backup" || :
+	[ -z "${_keithah_key_backup:-}" ] || rm -f "$_keithah_key_backup" || :
 }
 
 trap '_keithah_cleanup' 0
@@ -145,12 +157,21 @@ awk -v _keithah_managed="src/gz $_keithah_feed_name $_keithah_feed_url" \
 cat "$_keithah_tmp_filtered" >"$_keithah_tmp_feed" ||
 	_keithah_error 'feed configuration failed: cannot write customfeeds.conf'
 
+_keithah_feed_backup=$_keithah_opkg_dir/.customfeeds.conf.backup.$$
+_keithah_key_backup=$_keithah_key_dir/.f6c72c675c844b91.backup.$$
+if [ -e "$_keithah_feed_file" ]; then _keithah_feed_had=1; mv -f "$_keithah_feed_file" "$_keithah_feed_backup" || _keithah_error 'feed configuration failed: cannot stage feed backup'; fi
+if [ -e "$_keithah_key_file" ]; then _keithah_key_had=1; mv -f "$_keithah_key_file" "$_keithah_key_backup" || _keithah_error 'feed configuration failed: cannot stage key backup'; fi
+_keithah_rollback=1
 mv -f "$_keithah_tmp_key" "$_keithah_key_file" ||
 	_keithah_error 'feed configuration failed: cannot install public key'
 _keithah_tmp_key=
 mv -f "$_keithah_tmp_feed" "$_keithah_feed_file" ||
 	_keithah_error 'feed configuration failed: cannot install customfeeds.conf'
 _keithah_tmp_feed=
+_keithah_rollback=0
+rm -f "$_keithah_feed_backup" "$_keithah_key_backup"
+_keithah_feed_backup=
+_keithah_key_backup=
 rm -f "$_keithah_tmp_filtered" "$_keithah_tmp_expected_key"
 _keithah_tmp_filtered=
 _keithah_tmp_expected_key=
