@@ -70,9 +70,9 @@ publication, leaving the last verified Pages deployment live. Correct the
 upstream release and rerun the publisher manually (or wait for the next hourly
 run) to recover.
 
-Pages also enforces a manifest release floor for every source, so it refuses to
-publish a mixed-generation feed while a coordinated rollout is staggered. The
-floors are raised with each coordinated product rollout. GitHub's optional
+Pages enforces an independent manifest release floor for every source, rejecting
+each product's pre-floor versions while accepting newer versions independently.
+The floors are raised when that product completes a migration. GitHub's optional
 `immutable` release boolean is not required for current Ookla releases; the
 tag and asset allowlists, canonical installer bytes, hashes, signing, and
 deployable inventory remain the integrity boundary.
