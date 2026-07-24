@@ -92,6 +92,7 @@ class PackageRecord:
     size: int
     sha256: str
     control: tuple[tuple[str, str], ...]
+    installed_paths: tuple[str, ...]
 
     def render(self) -> str:
         fields = list(self.control)
@@ -337,15 +338,25 @@ def _read_ipk(path: Path) -> PackageRecord:
     if len(controls) != 1:
         raise FeedError("control archive must contain exactly one control file")
     data_raw = _bounded_gzip(members["data.tar.gz"], "data archive", MAX_DATA_TOTAL_SIZE)
-    _ustar_members(
+    data_members = _ustar_members(
         data_raw, "data archive", allow_directories=True,
         max_member_size=MAX_DATA_MEMBER_SIZE,
         max_total_size=MAX_DATA_TOTAL_SIZE,
     )
+    data_paths = [
+        info.name[2:] if info.name.startswith("./") else info.name
+        for info, _ in data_members
+    ]
+    duplicate_data_paths = [
+        name for name, count in Counter(data_paths).items() if count > 1
+    ]
+    if duplicate_data_paths:
+        raise FeedError(f"duplicate member in data archive: {sorted(duplicate_data_paths)[0]}")
     fields = _parse_control(controls[0])
     values = {name.lower(): value for name, value in fields}
     return PackageRecord(values["package"], values["version"], values["architecture"],
-                         path.name, stat.st_size, hashlib.sha256(compressed).hexdigest(), fields)
+                         path.name, stat.st_size, hashlib.sha256(compressed).hexdigest(), fields,
+                         tuple(sorted(data_paths)))
 
 
 def _copy_file(source: Path, destination: Path) -> None:
@@ -436,8 +447,17 @@ def assemble(download_root: Path, output: Path, manifest: dict) -> list[PackageR
                 filenames.add(ipk.name)
                 tuples.add(key)
                 pending.append((spec, ipk, match, record))
-        # Detect tuple collisions across the entire candidate set before the
-        # more specific filename/allowlist diagnostics can mask them.
+        # Reject payload collisions across the entire candidate set before
+        # staging any validated package files.
+        owners: dict[str, str] = {}
+        for _, _, _, record in pending:
+            for path in record.installed_paths:
+                owner = owners.get(path)
+                if owner is not None:
+                    raise FeedError(
+                        f"installed path collision: {path} owned by {owner} and {record.package}"
+                    )
+                owners[path] = record.package
         for spec, ipk, match, record in pending:
             if record.package not in spec.packages:
                 raise FeedError(f"control Package is outside the product allowlist: {record.package}")

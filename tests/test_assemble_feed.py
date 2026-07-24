@@ -37,6 +37,13 @@ def _tar(members, *, fmt=tarfile.USTAR_FORMAT):
     return raw.getvalue()
 
 
+def data_archive(*paths):
+    return gzip.compress(
+        _tar([(f"./{path}", path.encode(), "file") for path in paths]),
+        mtime=0,
+    )
+
+
 def make_ipk(path, package, version="1.0-1", arch="all", *,
              outer_format=tarfile.USTAR_FORMAT, control_format=tarfile.USTAR_FORMAT,
              control_name="./control", control_override=None,
@@ -258,6 +265,40 @@ class AssembleFeedTest(unittest.TestCase):
         link = gzip.compress(_tar([("./usr/bin/x", b"", "symlink")]), mtime=0)
         make_ipk(target, "starwatchd", arch="aarch64_cortex-a53", data_override=link)
         self.assert_rejected("extended member.*data archive")
+
+    def test_rejects_cross_package_installed_path_collision(self):
+        starwatch = next((self.downloads / "starwatch").glob("*.ipk"))
+        wattline = next((self.downloads / "wattline").glob("*.ipk"))
+        make_ipk(starwatch, "starwatchd", version="1.2.3", arch="aarch64_cortex-a53",
+                 data_override=data_archive("usr/libexec/keithah-feed-migrate"))
+        make_ipk(wattline, "wattline-bt", version="2.0.0", arch="all",
+                 data_override=data_archive("usr/libexec/keithah-feed-migrate"))
+        self.assert_rejected(
+            "installed path collision: usr/libexec/keithah-feed-migrate "
+            "owned by starwatchd and wattline-bt"
+        )
+
+        make_ipk(starwatch, "starwatchd", version="1.2.3", arch="aarch64_cortex-a53",
+                 data_override=data_archive("usr/libexec/starwatch-feed-migrate"))
+        make_ipk(wattline, "wattline-bt", version="2.0.0", arch="all",
+                 data_override=data_archive("usr/libexec/wattline-feed-migrate"))
+        records = assemble(self.downloads, self.output, self.manifest)
+        installed = {record.package: record.installed_paths for record in records}
+        self.assertEqual(installed["starwatchd"], ("usr/libexec/starwatch-feed-migrate",))
+        self.assertEqual(installed["wattline-bt"], ("usr/libexec/wattline-feed-migrate",))
+        packages = (self.output / "Packages").read_text()
+        self.assertNotIn("usr/libexec/starwatch-feed-migrate", packages)
+        self.assertNotIn("usr/libexec/wattline-feed-migrate", packages)
+
+    def test_rejects_duplicate_normalized_data_paths_within_one_package(self):
+        target = next((self.downloads / "starwatch").glob("*.ipk"))
+        duplicate_paths = gzip.compress(_tar([
+            ("./usr/libexec/feed-migrate", b"one", "file"),
+            ("usr/libexec/feed-migrate", b"two", "file"),
+        ]), mtime=0)
+        make_ipk(target, "starwatchd", version="1.2.3", arch="aarch64_cortex-a53",
+                 data_override=duplicate_paths)
+        self.assert_rejected("duplicate member in data archive: usr/libexec/feed-migrate")
 
     def test_rejects_data_archive_member_count_and_member_size_abuse(self):
         target = next((self.downloads / "starwatch").glob("*.ipk"))
