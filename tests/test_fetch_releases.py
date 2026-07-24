@@ -7,8 +7,8 @@ import tempfile
 import unittest
 from urllib.error import URLError
 
-from scripts.assemble_feed import load_manifest
-from scripts.fetch_releases import FetchError, _GitHubRedirectHandler, fetch_all
+from scripts.assemble_feed import _validate_manifest, load_manifest
+from scripts.fetch_releases import FetchError, _GitHubRedirectHandler, _latest_release, fetch_all
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -82,7 +82,7 @@ class FetchReleasesTest(unittest.TestCase):
         for source in self.manifest["sources"]:
             repository = source["repository"]
             product = source["product"]
-            tag = f"v1.0.0-{product}"
+            tag = source.get("minimum_tag", f"v1.0.0-{product}")
             commit = f"{asset_id:040x}"
             self.tags[product] = tag
             self.commits[product] = commit
@@ -170,25 +170,35 @@ class FetchReleasesTest(unittest.TestCase):
             f"https://api.github.com/repos/{source['repository']}/git/ref/tags/{self.tags[source['product']]}"
         ) == 2 for source in self.manifest["sources"]))
 
-    def test_percent_encodes_tag_as_one_exact_ref(self):
+    def test_rejects_release_below_manifest_floor_before_assets(self):
+        source = next(item for item in self.manifest["sources"] if item["product"] == "starwatch")
+        releases_url = f"https://api.github.com/repos/{source['repository']}/releases/latest"
+        release = json.loads(self.routes[releases_url].body)
+        release["tag_name"] = "v0.1.3"
+        self.routes[releases_url] = _json_response(release, releases_url)
+        spec = next(spec for spec in _validate_manifest(self.manifest) if spec.product == "starwatch")
+        with self.assertRaisesRegex(FetchError, r"starwatch.*v0\.1\.3.*v0\.1\.4"):
+            _latest_release(self.opener, spec, None)
+
+    def test_rejects_wattline_release_below_manifest_floor_before_assets(self):
+        source = next(item for item in self.manifest["sources"] if item["product"] == "wattline")
+        releases_url = f"https://api.github.com/repos/{source['repository']}/releases/latest"
+        release = json.loads(self.routes[releases_url].body)
+        release["tag_name"] = "v0.1.4"
+        self.routes[releases_url] = _json_response(release, releases_url)
+        spec = next(spec for spec in _validate_manifest(self.manifest) if spec.product == "wattline")
+        with self.assertRaisesRegex(FetchError, r"wattline.*v0\.1\.4.*v0\.1\.5"):
+            _latest_release(self.opener, spec, None)
+
+    def test_rejects_non_semver_release_tag(self):
         source = self.manifest["sources"][2]
         repository = source["repository"]
         releases_url = f"https://api.github.com/repos/{repository}/releases/latest"
         release = json.loads(self.routes[releases_url].body)
         release["tag_name"] = "v1.0+build/one"
         self.routes[releases_url] = _json_response(release, releases_url)
-        old_ref = next(url for url in self.routes if f"repos/{repository}/git/ref/" in url)
-        response = self.routes.pop(old_ref)
-        expected = old_ref.rsplit("/", 1)[0] + "/v1.0%2Bbuild%2Fone"
-        ref_value = response(None)
-        ref_json = json.loads(ref_value.body)
-        ref_json["ref"] = "refs/tags/v1.0+build/one"
-        self.routes[expected] = lambda _request, value=ref_json, url=expected: _json_response(value, url)
-        fetch_all(self.manifest, self.destination, opener=self.opener)
-        self.assertIn(expected, [request.full_url for request, _ in self.opener.requests])
-        contents = [url for url in (request.full_url for request, _ in self.opener.requests)
-                    if f"repos/{repository}/contents/" in url]
-        self.assertEqual(contents[0].split("?ref=", 1)[1], self.commits["speedtest"])
+        with self.assertRaisesRegex(FetchError, "invalid release tag"):
+            fetch_all(self.manifest, self.destination, opener=self.opener)
 
     def test_rejects_missing_duplicate_or_unexpected_package_assets(self):
         source = self.manifest["sources"][2]

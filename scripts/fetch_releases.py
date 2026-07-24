@@ -31,6 +31,7 @@ MAX_HEADER_SIZE = 64 * 1024
 CHUNK_SIZE = 64 * 1024
 MAX_TAG_DEPTH = 8
 GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+SEMVER_TAG = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 ALLOWED_DOWNLOAD_TYPES = frozenset({
     "application/octet-stream",
     "application/gzip",
@@ -198,6 +199,13 @@ def _validate_tag(tag: object) -> str:
     return tag
 
 
+def _semantic_version(tag: str) -> tuple[int, int, int]:
+    match = SEMVER_TAG.fullmatch(tag)
+    if match is None:
+        raise FetchError(f"invalid release tag (expected vMAJOR.MINOR.PATCH): {tag}")
+    return tuple(int(part) for part in match.groups())
+
+
 def _asset_api_url(spec: SourceSpec, asset: dict) -> tuple[str, str]:
     if not isinstance(asset, dict):
         raise FetchError("malformed release asset")
@@ -231,6 +239,12 @@ def _latest_release(
     if "immutable" in release and not isinstance(release["immutable"], bool):
         raise FetchError("latest release immutable flag must be boolean")
     tag = _validate_tag(release["tag_name"])
+    observed_version = _semantic_version(tag)
+    required_version = _semantic_version(spec.minimum_tag)
+    if observed_version < required_version:
+        raise FetchError(
+            f"{spec.product} release tag {tag} is below required minimum {spec.minimum_tag}"
+        )
     raw_assets = release["assets"]
     if not isinstance(raw_assets, list) or len(raw_assets) > 256:
         raise FetchError("malformed release asset list")

@@ -70,6 +70,13 @@ publication, leaving the last verified Pages deployment live. Correct the
 upstream release and rerun the publisher manually (or wait for the next hourly
 run) to recover.
 
+Pages also enforces a manifest release floor for every source, so it refuses to
+publish a mixed-generation feed while a coordinated rollout is staggered. The
+floors are raised with each coordinated product rollout. GitHub's optional
+`immutable` release boolean is not required for current Ookla releases; the
+tag and asset allowlists, canonical installer bytes, hashes, signing, and
+deployable inventory remain the integrity boundary.
+
 The Speedtest package downloads Ookla's official Linux binary while the package
 is built; no Ookla binary or vendor archive is stored in this repository.
 Ookla's software is proprietary, and its EULA/licensing prompt remains the

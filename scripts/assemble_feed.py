@@ -32,6 +32,7 @@ REPOSITORY = re.compile(r"^keithah/[A-Za-z0-9._-]+$")
 SAFE_INSTALLER = re.compile(r"^install-[a-z0-9][a-z0-9-]*\.sh$")
 SAFE_RELEASE_INSTALLER = re.compile(r"^(?:install|install-[a-z0-9][a-z0-9-]*)\.sh$")
 SOURCE_PATH = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
+MINIMUM_TAG = re.compile(r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
 EXPECTED_REPOSITORIES = {
     "starwatch": "keithah/openwrt-starwatch",
     "wattline": "keithah/openwrt-wattline",
@@ -56,6 +57,12 @@ EXPECTED_RELEASE_INSTALLER_ASSETS = {
     "speedtest": "install-ookla-speedtest-cli.sh",
     "speedtest-web": "install.sh",
 }
+EXPECTED_MINIMUM_TAGS = {
+    "starwatch": "v0.1.4",
+    "wattline": "v0.1.5",
+    "speedtest": "v1.2.0",
+    "speedtest-web": "v1.2.0",
+}
 EXPECTED_IPK_PATTERNS = {
     "starwatch": r"^(?P<package>starwatchd|luci-app-starwatch|gl-app-starwatch)_(?P<version>[A-Za-z0-9.+~:-]+)_(?P<architecture>aarch64_cortex-a53|all)\.ipk$",
     "wattline": r"^(?P<package>wattlined|wattline-bt|wattline-rtl8761b|luci-app-wattline|gl-app-wattline)_(?P<version>[A-Za-z0-9.+~:-]+)_(?P<architecture>aarch64_cortex-a53|all)\.ipk$",
@@ -77,6 +84,7 @@ class SourceSpec:
     installer: str
     installer_source: str
     release_installer_asset: str | None
+    minimum_tag: str
 
     @property
     def ipk_regex(self) -> re.Pattern[str]:
@@ -118,7 +126,7 @@ def _validate_manifest(raw: dict) -> list[SourceSpec]:
         raise FeedError("manifest must contain only a sources array")
     required = {
         "product", "repository", "packages", "ipk_pattern", "installer",
-        "installer_source", "release_installer_asset",
+        "installer_source", "release_installer_asset", "minimum_tag",
     }
     result = []
     products = set()
@@ -137,6 +145,7 @@ def _validate_manifest(raw: dict) -> list[SourceSpec]:
             packages=tuple(item["packages"]), ipk_pattern=item["ipk_pattern"],
             installer=item["installer"], installer_source=item["installer_source"],
             release_installer_asset=item["release_installer_asset"],
+            minimum_tag=item["minimum_tag"],
         )
         if not PRODUCT_NAME.fullmatch(spec.product) or not REPOSITORY.fullmatch(spec.repository):
             raise FeedError("invalid product or repository")
@@ -145,6 +154,8 @@ def _validate_manifest(raw: dict) -> list[SourceSpec]:
             raise FeedError("invalid or duplicate package allowlist")
         if not SAFE_INSTALLER.fullmatch(spec.installer) or not SOURCE_PATH.fullmatch(spec.installer_source):
             raise FeedError("invalid installer path")
+        if not MINIMUM_TAG.fullmatch(spec.minimum_tag):
+            raise FeedError("minimum_tag must be vMAJOR.MINOR.PATCH")
         if (spec.release_installer_asset is not None
                 and not SAFE_RELEASE_INSTALLER.fullmatch(spec.release_installer_asset)):
             raise FeedError("invalid release installer asset")
@@ -165,6 +176,7 @@ def _validate_manifest(raw: dict) -> list[SourceSpec]:
             or {spec.product: (spec.installer, spec.installer_source) for spec in result} != EXPECTED_INSTALLERS
             or {spec.product: spec.release_installer_asset for spec in result}
             != EXPECTED_RELEASE_INSTALLER_ASSETS
+            or {spec.product: spec.minimum_tag for spec in result} != EXPECTED_MINIMUM_TAGS
             or {spec.product: spec.ipk_pattern for spec in result} != EXPECTED_IPK_PATTERNS):
         raise FeedError("manifest must define the four exact product repositories, packages, installers, and regexes")
     return result
