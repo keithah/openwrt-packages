@@ -185,12 +185,21 @@ _keithah_tmp_expected_key=
 
 opkg update || _keithah_error 'feed update failed'
 for _keithah_daemon in $_keithah_daemons; do
-	if opkg status "$_keithah_daemon" >/dev/null 2>&1; then
+	# `opkg status <pkg>` exits 0 even for a package that was never
+	# installed; it prints nothing in that case. Presence must be judged
+	# from the output, not the exit status.
+	if _keithah_daemon_status=$(opkg status "$_keithah_daemon" 2>/dev/null) &&
+		[ -n "$_keithah_daemon_status" ]; then
 		if ! opkg install "$_keithah_daemon"; then
-			_keithah_error "installed-product repair failed: $_keithah_daemon"
+			# A repair failure for one already-installed peer product must
+			# not block installing the package the user actually asked
+			# for, so this is a warning, not a fatal error.
+			printf 'keithah installer recovery: warning: installed-product repair failed: %s (continuing)\n' \
+				"$_keithah_daemon" >&2
 		fi
 	fi
 done
+unset _keithah_daemon_status
 
 trap - 0 HUP INT TERM
 unset _keithah_root _keithah_feed_url _keithah_supported_arch _keithah_daemons

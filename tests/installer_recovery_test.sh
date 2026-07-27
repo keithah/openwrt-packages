@@ -22,9 +22,12 @@ case $1 in
 	update)
 		;;
 	status)
+		# Real opkg exits 0 for `status <pkg>` even when <pkg> was never
+		# installed; it just prints nothing. Mirror that here so tests
+		# catch code that mistakes the exit status for presence.
 		case " ${MOCK_INSTALLED:-} " in
 			*" $2 "*) printf 'Package: %s\nStatus: install user installed\n' "$2" ;;
-			*) exit 1 ;;
+			*) ;;
 		esac
 		;;
 	install)
@@ -197,13 +200,16 @@ install wattlined
 upstream' "$TMP/both_peers/log"
 
 run_case repair_failure 'starwatchd wattlined' starwatchd aarch64_cortex-a53
-[ "$_status" -ne 0 ] || fail "repair failure unexpectedly succeeded"
+[ "$_status" -eq 0 ] || fail "repair failure must not block the upstream install"
 assert_log 'print-architecture
 update
 status starwatchd
-install starwatchd' "$TMP/repair_failure/log"
-grep -F 'keithah installer recovery: installed-product repair failed: starwatchd' \
-	"$TMP/repair_failure/stderr" >/dev/null || fail "repair failure message is missing"
+install starwatchd
+status wattlined
+install wattlined
+upstream' "$TMP/repair_failure/log"
+grep -F 'keithah installer recovery: warning: installed-product repair failed: starwatchd (continuing)' \
+	"$TMP/repair_failure/stderr" >/dev/null || fail "repair failure warning is missing"
 
 run_case bad_arch 'starwatchd wattlined' '' x86_64
 [ "$_status" -ne 0 ] || fail "bad architecture unexpectedly succeeded"
